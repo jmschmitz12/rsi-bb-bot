@@ -49,14 +49,13 @@ def is_market_open():
 
 
 async def send_formatted_alert(ctx_or_channel, ticker, signal, price, rsi, band):
-    """Sends a ping with the key details in the text for mobile banners."""
+    """Sends a cleaner alert without tagging the user ID."""
     alert_color = 0x2ecc71 if signal == "OVERSOLD" else 0xe74c3c
 
-    # 1. THE BANNER FIX: Put the important data in the text content
-    # This is what shows up in your phone's notification banner
-    banner_text = f"🚨 **{ticker} {signal}** at **${price:.2f}** (RSI: {rsi:.2f}) <@{MY_USER_ID}>"
+    # 1. CLEANER BANNER: No user tag, just the data
+    banner_text = f"🚨 **{ticker} {signal}** at **${price:.2f}** (RSI: {rsi:.2f})"
 
-    # 2. THE CARD: The fancy embed for when you open the app
+    # 2. THE CARD
     embed = discord.Embed(
         title=f"{ticker} - {signal} detected",
         description=f"Market price crossed the {'Lower' if signal == 'OVERSOLD' else 'Upper'} Bollinger Band.",
@@ -69,7 +68,6 @@ async def send_formatted_alert(ctx_or_channel, ticker, signal, price, rsi, band)
     embed.set_footer(text="Market Watchdog")
 
     await ctx_or_channel.send(content=banner_text, embed=embed)
-
 def get_market_data(ticker):
     global rate_limit_cooldown
     try:
