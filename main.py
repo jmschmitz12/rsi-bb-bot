@@ -49,19 +49,26 @@ def is_market_open():
 
 
 async def send_formatted_alert(ctx_or_channel, ticker, signal, price, rsi, band):
+    """Sends a ping with the key details in the text for mobile banners."""
     alert_color = 0x2ecc71 if signal == "OVERSOLD" else 0xe74c3c
+
+    # 1. THE BANNER FIX: Put the important data in the text content
+    # This is what shows up in your phone's notification banner
+    banner_text = f"🚨 **{ticker} {signal}** at **${price:.2f}** (RSI: {rsi:.2f}) <@{MY_USER_ID}>"
+
+    # 2. THE CARD: The fancy embed for when you open the app
     embed = discord.Embed(
-        title=f"🚨 {ticker} {signal} SIGNAL",
-        description=f"Technical confluence detected.",
+        title=f"{ticker} - {signal} detected",
+        description=f"Market price crossed the {'Lower' if signal == 'OVERSOLD' else 'Upper'} Bollinger Band.",
         color=alert_color,
         timestamp=datetime.now()
     )
-    embed.add_field(name="Price", value=f"**${price:.2f}**", inline=True)
-    embed.add_field(name="RSI", value=f"**{rsi:.2f}**", inline=True)
-    embed.add_field(name="Band", value=f"${band:.2f}", inline=True)
+    embed.add_field(name="Current Price", value=f"**${price:.2f}**", inline=True)
+    embed.add_field(name="RSI (14)", value=f"**{rsi:.2f}**", inline=True)
+    embed.add_field(name="Target Band", value=f"${band:.2f}", inline=True)
     embed.set_footer(text="Market Watchdog")
-    await ctx_or_channel.send(content=f"<@{MY_USER_ID}>", embed=embed)
 
+    await ctx_or_channel.send(content=banner_text, embed=embed)
 
 def get_market_data(ticker):
     global rate_limit_cooldown
@@ -210,14 +217,13 @@ async def mute(ctx, ticker: str, minutes: int):
 
 @bot.command()
 async def scan(ctx):
-    await ctx.send("🔍 Manual Scan...")
+    """Silent manual scan."""
+    # We remove the "Scanning..." message
     for ticker in WATCHLIST:
         result = get_market_data(ticker)
         if result:
             await send_formatted_alert(ctx, ticker, *result)
         await asyncio.sleep(1)
-    await ctx.send("✅ Scan Complete.")
-
 
 @bot.command()
 async def status(ctx):
