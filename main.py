@@ -16,7 +16,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv('DISCORD_TOKEN')
 # Initial Watchlist (Can be changed dynamically via Discord now)
-WATCHLIST = ['AMZN', 'NVDA', 'SPY', 'TQQQ', 'GRAB', 'TSLA']
+WATCHLIST = ['AMZN', 'NVDA', 'SPY', 'QQQ', 'META', 'MSFT', 'PM', 'DAL', 'AAL', 'GOOG', 'KO', 'AMD', 'AVGO', 'PLTR', 'TSLA']
 RSI_LIMIT = 30
 BB_STD = 2.0
 POLL_SPEED_MINUTES = 5
