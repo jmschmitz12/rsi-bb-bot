@@ -1,273 +1,256 @@
 import discord
 import os
-import json
-import asyncio
-import holidays
+from discord.ext import tasks, commands
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
-from discord.ext import tasks, commands
+import asyncio
+import holidays
 from datetime import datetime, timedelta, time as dt_time
 from dotenv import load_dotenv
-from zoneinfo import ZoneInfo  # <--- Added for Timezone Safety
 
 # ==========================================
-# 1. SETUP & CONFIG
+# 1. CONFIGURATION
 # ==========================================
 load_dotenv()
 
-# Sanity Check: Ensure tokens exist
-if not os.getenv('DISCORD_TOKEN') or not os.getenv('USER_ID'):
-    print("❌ ERROR: Missing DISCORD_TOKEN or USER_ID in .env file")
-    exit(1)
-
 BOT_TOKEN = os.getenv('DISCORD_TOKEN')
-USER_ID = int(os.getenv('USER_ID'))
-CHANNEL_ID = 1462117751073013973
-WATCHLIST_FILE = "watchlist.json"
-
-# Trading Settings
+# Initial Watchlist (Can be changed dynamically via Discord now)
+WATCHLIST = ['AMZN', 'NVDA', 'SPY', 'QQQ', 'META', 'MSFT', 'PM', 'DAL', 'AAL', 'GOOG', 'KO', 'AMD', 'AVGO', 'PLTR', 'TSLA']
 RSI_LIMIT = 30
 BB_STD = 2.0
 POLL_SPEED_MINUTES = 5
 
+CHANNEL_ID = 1462117751073013973
+MY_USER_ID = int(os.getenv('USER_ID'))
 
 # ==========================================
-# 2. DATA MANAGER
+# 2. BOT SETUP
 # ==========================================
-class DataManager:
-    @staticmethod
-    def load_watchlist():
-        if os.path.exists(WATCHLIST_FILE):
-            try:
-                with open(WATCHLIST_FILE, "r") as f:
-                    return json.load(f)
-            except json.JSONDecodeError:
-                print("⚠️ Watchlist file corrupted, loading defaults.")
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-        return ['AMZN', 'NVDA', 'SPY', 'QQQ', 'META', 'MSFT', 'AMD', 'PLTR', 'TSLA']
-
-    @staticmethod
-    def save_watchlist(watchlist):
-        with open(WATCHLIST_FILE, "w") as f:
-            json.dump(watchlist, f)
+# State Variables
+paused_until = None  # Global system pause
+rate_limit_cooldown = False
+ticker_mutes = {}  # Dictionary to store muted tickers: {'NVDA': datetime_object}
 
 
 # ==========================================
-# 3. TRADING LOGIC
+# 3. HELPER FUNCTIONS
 # ==========================================
-def fetch_ticker_data(ticker):
-    """Blocking I/O - Run in executor."""
+def is_market_open():
+    now = datetime.now()
+    if now.weekday() >= 5: return False
+    nyse_holidays = holidays.NYSE()
+    if now.date() in nyse_holidays: return False
+    return dt_time(9, 30) <= now.time() <= dt_time(16, 0)
+
+
+async def send_formatted_alert(ctx_or_channel, ticker, signal, price, rsi, band):
+    """Sends a cleaner alert without tagging the user ID."""
+    alert_color = 0x2ecc71 if signal == "OVERSOLD" else 0xe74c3c
+
+    # 1. CLEANER BANNER: No user tag, just the data
+    banner_text = f"🚨 **{ticker} {signal}** at **${price:.2f}** (RSI: {rsi:.2f})"
+
+    # 2. THE CARD
+    embed = discord.Embed(
+        title=f"{ticker} - {signal} detected",
+        description=f"Market price crossed the {'Lower' if signal == 'OVERSOLD' else 'Upper'} Bollinger Band.",
+        color=alert_color,
+        timestamp=datetime.now()
+    )
+    embed.add_field(name="Current Price", value=f"**${price:.2f}**", inline=True)
+    embed.add_field(name="RSI (14)", value=f"**{rsi:.2f}**", inline=True)
+    embed.add_field(name="Target Band", value=f"${band:.2f}", inline=True)
+    embed.set_footer(text="Market Watchdog")
+
+    await ctx_or_channel.send(content=banner_text, embed=embed)
+def get_market_data(ticker):
+    global rate_limit_cooldown
     try:
-        df = yf.download(ticker, period="2y", interval="1d", progress=False)
+        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        if df.empty or len(df) < 50: return None
+        if df.empty or len(df) < 20: return None
 
         df['RSI'] = ta.rsi(df['Close'], length=14)
         bb = ta.bbands(df['Close'], length=20, std=BB_STD)
-
         if bb is None: return None
-
         df = pd.concat([df, bb], axis=1)
 
-        # Dynamic Column Finding
-        try:
-            bbl_col = [c for c in df.columns if c.startswith('BBL')][0]
-            bbu_col = [c for c in df.columns if c.startswith('BBU')][0]
-        except IndexError:
-            return None
+        bbl_col = [c for c in df.columns if c.startswith('BBL')][0]
+        bbu_col = [c for c in df.columns if c.startswith('BBU')][0]
 
-        return {
-            "price": df['Close'].iloc[-1],
-            "rsi": df['RSI'].iloc[-1],
-            "bbl": df[bbl_col].iloc[-1],
-            "bbu": df[bbu_col].iloc[-1]
-        }
+        price, rsi = df['Close'].iloc[-1], df['RSI'].iloc[-1]
+        bbl, bbu = df[bbl_col].iloc[-1], df[bbu_col].iloc[-1]
+
+        if price < bbl and rsi < RSI_LIMIT:
+            return ("OVERSOLD", price, rsi, bbl)
+        elif price > bbu and rsi > (100 - RSI_LIMIT):
+            return ("OVERBOUGHT", price, rsi, bbu)
+        return None
+
     except Exception as e:
-        print(f"Error fetching {ticker}: {e}")
+        if "429" in str(e):
+            print(f"!!! RATE LIMIT HIT on {ticker} !!!")
+            rate_limit_cooldown = True
+        else:
+            print(f"Error on {ticker}: {e}")
         return None
 
 
 # ==========================================
-# 4. THE BOT
+# 4. BACKGROUND TASK
 # ==========================================
-class MarketScanner(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-        self.watchlist = DataManager.load_watchlist()
-        self.paused_until = None
-        self.ticker_mutes = {}
-        self.scanner_task.start()
+@tasks.loop(minutes=POLL_SPEED_MINUTES)
+async def market_scanner():
+    global paused_until, rate_limit_cooldown, ticker_mutes
 
-    def cog_unload(self):
-        self.scanner_task.cancel()
+    # 1. Handle Rate Limit Cooldown
+    if rate_limit_cooldown:
+        channel = bot.get_channel(CHANNEL_ID)
+        await channel.send("⚠️ **RATE LIMIT ALERT**: Throttled. Cooling down for 30 mins...")
+        paused_until = datetime.now() + timedelta(minutes=30)
+        rate_limit_cooldown = False
+        return
 
-    def is_market_open(self):
-        # FORCE NY TIMEZONE
-        now = datetime.now(ZoneInfo("America/New_York"))
+    # 2. Check Global Pause
+    if paused_until and datetime.now() < paused_until:
+        return
 
-        if now.weekday() >= 5: return False
-        if now.date() in holidays.NYSE(): return False
-        return dt_time(9, 30) <= now.time() <= dt_time(16, 0)
+    # 3. Check Market Hours
+    if not is_market_open():
+        return
 
-    async def send_alert(self, ticker, signal, data):
-        channel = self.bot.get_channel(CHANNEL_ID)
-        if not channel:
-            print(f"❌ Error: Could not find channel {CHANNEL_ID}")
-            return
+    # 4. Scan
+    channel = bot.get_channel(CHANNEL_ID)
+    now = datetime.now()
 
-        color = 0x2ecc71 if signal == "OVERSOLD" else 0xe74c3c
-        target = data['bbl'] if signal == "OVERSOLD" else data['bbu']
+    # CLEAN UP EXPIRED MUTES
+    ticker_mutes = {t: time for t, time in ticker_mutes.items() if time > now}
 
-        content_msg = f"<@{USER_ID}> **{ticker}** {signal}"
-        embed = discord.Embed(title=f"🚨 {ticker} {signal}", color=color, timestamp=datetime.now())
-        embed.add_field(name="Price", value=f"**${data['price']:.2f}**", inline=True)
-        embed.add_field(name="RSI", value=f"**{data['rsi']:.1f}**", inline=True)
-        embed.add_field(name="Target Band", value=f"${target:.2f}", inline=True)
-        embed.set_footer(text="Daily Strategy • Market Watchdog")
+    for ticker in WATCHLIST:
+        # Check if Ticker is Muted
+        if ticker in ticker_mutes:
+            continue
 
-        await channel.send(content=content_msg, embed=embed)
+        result = get_market_data(ticker)
+        if result:
+            await send_formatted_alert(channel, ticker, *result)
+        await asyncio.sleep(1.5)
 
-    @tasks.loop(minutes=POLL_SPEED_MINUTES)
-    async def scanner_task(self):
-        if self.paused_until and datetime.now() < self.paused_until: return
-        if not self.is_market_open(): return
 
-        now = datetime.now()
-        self.ticker_mutes = {t: time for t, time in self.ticker_mutes.items() if time > now}
-
-        print(f"[{now.strftime('%H:%M')}] Scanning {len(self.watchlist)} tickers...")
-
-        for ticker in self.watchlist:
-            if ticker in self.ticker_mutes: continue
-
-            # Run blocking I/O in a separate thread
-            data = await asyncio.to_thread(fetch_ticker_data, ticker)
-
-            if not data: continue
-
-            if data['price'] < data['bbl'] and data['rsi'] < RSI_LIMIT:
-                await self.send_alert(ticker, "OVERSOLD", data)
-            elif data['price'] > data['bbu'] and data['rsi'] > (100 - RSI_LIMIT):
-                await self.send_alert(ticker, "OVERBOUGHT", data)
-
-            await asyncio.sleep(1)
-
-    @scanner_task.before_loop
-    async def before_scanner(self):
-        await self.bot.wait_until_ready()
-
-    # --- COMMANDS ---
-    @commands.command()
-    async def check(self, ctx, *tickers: str):
-        """⚡ Instant analysis. Usage: !check NVDA MSFT SPY"""
-
-        if not tickers:
-            await ctx.send("⚠️ Usage: `!check TICKER` or `!check TICKER1 TICKER2`")
-            return
-
-        # Loop through every ticker user typed
-        for ticker in tickers:
-            ticker = ticker.upper()
-
-            # Fetch data (Background thread)
-            data = await asyncio.to_thread(fetch_ticker_data, ticker)
-
-            if not data:
-                await ctx.send(f"❌ Could not fetch data for **{ticker}**.")
-                continue  # Skip to the next ticker in the list
-
-            # Determine Status
-            if data['price'] < data['bbl']:
-                status, color = "🚨 OVERSOLD", 0x2ecc71
-            elif data['price'] > data['bbu']:
-                status, color = "🚨 OVERBOUGHT", 0xe74c3c
-            else:
-                status, color = "☁️ NEUTRAL", 0x3498db
-
-            # Build the card
-            embed = discord.Embed(title=f"📊 Report: {ticker}", description=f"**Status:** {status}", color=color)
-            embed.add_field(name="Price", value=f"${data['price']:.2f}", inline=True)
-            embed.add_field(name="RSI", value=f"{data['rsi']:.1f}", inline=True)
-            embed.add_field(name="Bands", value=f"L: ${data['bbl']:.2f} / U: ${data['bbu']:.2f}", inline=True)
-
-            # Send immediately
-            await ctx.send(embed=embed)
-
-    @commands.command()
-    async def add(self, ctx, ticker: str):
-        ticker = ticker.upper()
-        if ticker not in self.watchlist:
-            self.watchlist.append(ticker)
-            DataManager.save_watchlist(self.watchlist)
-            await ctx.send(f"✅ **{ticker}** added.")
-        else:
-            await ctx.send(f"⚠️ **{ticker}** already tracked.")
-
-    @commands.command()
-    async def remove(self, ctx, ticker: str):
-        ticker = ticker.upper()
-        if ticker in self.watchlist:
-            self.watchlist.remove(ticker)
-            DataManager.save_watchlist(self.watchlist)
-            await ctx.send(f"🗑️ **{ticker}** removed.")
-        else:
-            await ctx.send(f"⚠️ **{ticker}** not found.")
-
-    @commands.command()
-    async def watchlist(self, ctx):
-        items = sorted(self.watchlist)
-        # Handle empty list
-        if not items:
-            await ctx.send("Watchlist is empty.")
-            return
-
-        chunked = [items[i:i + 15] for i in range(0, len(items), 15)]
-        for chunk in chunked:
-            desc = ", ".join(f"`{t}`" for t in chunk)
-            embed = discord.Embed(title="📋 Watchlist", description=desc, color=0x3498db)
-            await ctx.send(embed=embed)
-
-    @commands.command()
-    async def status(self, ctx):
-        now = datetime.now(ZoneInfo("America/New_York"))
-        if self.paused_until and datetime.now() < self.paused_until:
-            rem = int((self.paused_until - datetime.now()).total_seconds() / 60)
-            await ctx.send(f"⏸️ **PAUSED** for {rem} mins.")
-        elif not self.is_market_open():
-            reason = "Market Closed"
-            if now.date() in holidays.NYSE(): reason = f"Holiday: {holidays.NYSE().get(now.date())}"
-            await ctx.send(f"💤 {reason}")
-        else:
-            await ctx.send("🟢 **ONLINE**")
-
-    @commands.command()
-    async def pause(self, ctx, minutes: int):
-        self.paused_until = datetime.now() + timedelta(minutes=minutes)
-        await ctx.send(f"⏸️ Paused {minutes}m.")
-
-    @commands.command()
-    async def resume(self, ctx):
-        self.paused_until = None
-        await ctx.send("▶️ Resumed.")
+@market_scanner.before_loop
+async def before_scanner():
+    await bot.wait_until_ready()
 
 
 # ==========================================
-# 5. RUN
+# 5. COMMANDS
 # ==========================================
+@bot.event
+async def on_ready():
+    print(f'Logged in as {bot.user}')
+    if not market_scanner.is_running():
+        market_scanner.start()
+
+
+# --- NEW WATCHLIST COMMANDS ---
+
+@bot.command()
+async def add(ctx, ticker: str):
+    """Adds a ticker to the watchlist."""
+    ticker = ticker.upper()
+    if ticker not in WATCHLIST:
+        WATCHLIST.append(ticker)
+        await ctx.send(f"✅ Added **{ticker}** to watchlist.")
+    else:
+        await ctx.send(f"⚠️ **{ticker}** is already in the list.")
+
+
+@bot.command()
+async def remove(ctx, ticker: str):
+    """Removes a ticker from the watchlist."""
+    ticker = ticker.upper()
+    if ticker in WATCHLIST:
+        WATCHLIST.remove(ticker)
+        await ctx.send(f"🗑️ Removed **{ticker}** from watchlist.")
+    else:
+        await ctx.send(f"⚠️ **{ticker}** not found.")
+
+
+@bot.command()
+async def watchlist(ctx):
+    """Displays all active tickers."""
+    # Check for any muted tickers
+    now = datetime.now()
+    msg = "**📊 CURRENT WATCHLIST**\n"
+    for t in sorted(WATCHLIST):
+        if t in ticker_mutes and ticker_mutes[t] > now:
+            msg += f"• ~~{t}~~ (Muted)\n"
+        else:
+            msg += f"• {t}\n"
+    await ctx.send(msg)
+
+
+@bot.command()
+async def mute(ctx, ticker: str, minutes: int):
+    """Mutes a specific ticker for X minutes."""
+    ticker = ticker.upper()
+    if ticker not in WATCHLIST:
+        await ctx.send(f"⚠️ **{ticker}** is not in your watchlist.")
+        return
+
+    unmute_time = datetime.now() + timedelta(minutes=minutes)
+    ticker_mutes[ticker] = unmute_time
+    await ctx.send(f"🔇 Muted **{ticker}** alerts for {minutes} minutes.")
+
+
+# --- EXISTING COMMANDS ---
+
+@bot.command()
+async def scan(ctx):
+    """Silent manual scan."""
+    # We remove the "Scanning..." message
+    for ticker in WATCHLIST:
+        result = get_market_data(ticker)
+        if result:
+            await send_formatted_alert(ctx, ticker, *result)
+        await asyncio.sleep(1)
+
+@bot.command()
+async def status(ctx):
+    now = datetime.now()
+    nyse_holidays = holidays.NYSE()
+    if paused_until and now < paused_until:
+        rem = int((paused_until - now).total_seconds() / 60)
+        await ctx.send(f"⏸️ **SYSTEM PAUSED** for {rem} mins.")
+    elif now.date() in nyse_holidays:
+        await ctx.send(f"💤 **Holiday**: {nyse_holidays.get(now.date())}")
+    elif not is_market_open():
+        await ctx.send("💤 Market Closed.")
+    else:
+        await ctx.send(f"🟢 **ONLINE**.")
+
+
+@bot.command()
+async def pause(ctx, minutes: int):
+    global paused_until
+    paused_until = datetime.now() + timedelta(minutes=minutes)
+    await ctx.send(f"⏸️ System paused for {minutes} mins.")
+
+
+@bot.command()
+async def resume(ctx):
+    global paused_until
+    paused_until = None
+    await ctx.send("▶️ Resuming operations.")
+
+
 if __name__ == "__main__":
-    intents = discord.Intents.default()
-    intents.message_content = True
-    bot = commands.Bot(command_prefix='!', intents=intents)
-
-
-    @bot.event
-    async def on_ready():
-        print(f"--- Logged in as {bot.user} ---")
-        await bot.add_cog(MarketScanner(bot))
-
-
     bot.run(BOT_TOKEN)
