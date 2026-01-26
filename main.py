@@ -257,7 +257,6 @@ async def remove(ctx, *tickers: str):
 async def check(ctx, ticker: str):
     """Manually checks a ticker's stats."""
     ticker = ticker.upper()
-    await ctx.send(f"🔍 Checking **{ticker}**... please wait.")
 
     data = get_market_data(ticker, force_return=True)
 
