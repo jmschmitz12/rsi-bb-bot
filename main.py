@@ -1,6 +1,6 @@
 import discord
 import os
-import json  # <--- NEW: Needed for saving data
+import json
 from discord.ext import tasks, commands
 import yfinance as yf
 import pandas as pd
@@ -23,10 +23,10 @@ MY_USER_ID = int(os.getenv('USER_ID'))
 RSI_LIMIT = 30
 BB_STD = 2.0
 POLL_SPEED_MINUTES = 5
-WATCHLIST_FILE = "watchlist.json"  # <--- NEW: File name to save data
+WATCHLIST_FILE = "watchlist.json"
 
-# The "Backup" list if the file gets deleted or hasn't been created yet
-DEFAULT_WATCHLIST = ['AMZN', 'NVDA', 'SPY', 'QQQ', 'META', 'MSFT', 'PM', 'DAL', 'AAL', 'GOOG', 'KO', 'AMD', 'AVGO', 'PLTR', 'TSLA']
+DEFAULT_WATCHLIST = ['AMZN', 'NVDA', 'SPY', 'QQQ', 'META', 'MSFT', 'PM', 'DAL', 'AAL', 'GOOG', 'KO', 'AMD', 'AVGO',
+                     'PLTR', 'TSLA']
 
 # ==========================================
 # 2. BOT SETUP
@@ -40,7 +40,8 @@ paused_until = None
 rate_limit_cooldown = False
 ticker_mutes = {}
 
-# --- NEW FUNCTION: LOAD WATCHLIST ---
+
+# --- LOAD WATCHLIST ---
 def load_watchlist():
     if os.path.exists(WATCHLIST_FILE):
         try:
@@ -52,9 +53,10 @@ def load_watchlist():
             print(f"Error loading watchlist: {e}")
             return DEFAULT_WATCHLIST
     else:
-        return list(DEFAULT_WATCHLIST) # Return a copy of defaults
+        return list(DEFAULT_WATCHLIST)
 
-# --- NEW FUNCTION: SAVE WATCHLIST ---
+
+# --- SAVE WATCHLIST ---
 def save_watchlist():
     try:
         with open(WATCHLIST_FILE, 'w') as f:
@@ -63,7 +65,7 @@ def save_watchlist():
     except Exception as e:
         print(f"Error saving watchlist: {e}")
 
-# Initialize Watchlist immediately on startup
+
 WATCHLIST = load_watchlist()
 
 
@@ -96,7 +98,12 @@ async def send_formatted_alert(ctx_or_channel, ticker, signal, price, rsi, band)
     await ctx_or_channel.send(content=banner_text, embed=embed)
 
 
-def get_market_data(ticker):
+def get_market_data(ticker, force_return=False):
+    """
+    Fetches data.
+    If force_return=True, returns (price, rsi, bbl, bbu) regardless of signals.
+    If force_return=False, returns only if a signal is triggered.
+    """
     global rate_limit_cooldown
     try:
         df = yf.download(ticker, period="6mo", interval="1d", progress=False)
@@ -117,6 +124,11 @@ def get_market_data(ticker):
         price, rsi = df['Close'].iloc[-1], df['RSI'].iloc[-1]
         bbl, bbu = df[bbl_col].iloc[-1], df[bbu_col].iloc[-1]
 
+        # Mode 1: Manual Check (Command !check)
+        if force_return:
+            return (price, rsi, bbl, bbu)
+
+        # Mode 2: Scanner (Alerts Only)
         if price < bbl and rsi < RSI_LIMIT:
             return ("OVERSOLD", price, rsi, bbl)
         elif price > bbu and rsi > (100 - RSI_LIMIT):
@@ -160,7 +172,7 @@ async def market_scanner():
         if ticker in ticker_mutes:
             continue
 
-        result = get_market_data(ticker)
+        result = get_market_data(ticker, force_return=False)
         if result:
             await send_formatted_alert(channel, ticker, *result)
         await asyncio.sleep(1.5)
@@ -181,28 +193,97 @@ async def on_ready():
         market_scanner.start()
 
 
+# --- UPGRADED BULK COMMANDS ---
+
 @bot.command()
-async def add(ctx, ticker: str):
-    """Adds a ticker to the watchlist."""
-    ticker = ticker.upper()
-    if ticker not in WATCHLIST:
-        WATCHLIST.append(ticker)
-        save_watchlist()  # <--- NEW: Save changes
-        await ctx.send(f"✅ Added **{ticker}** to watchlist.")
-    else:
-        await ctx.send(f"⚠️ **{ticker}** is already in the list.")
+async def add(ctx, *tickers: str):
+    """Adds multiple tickers to the watchlist."""
+    if not tickers:
+        await ctx.send("⚠️ Usage: `!add TICKER1 TICKER2 ...`")
+        return
+
+    added = []
+    skipped = []
+
+    for t in tickers:
+        t = t.upper().replace(',', '')
+        if t not in WATCHLIST:
+            WATCHLIST.append(t)
+            added.append(t)
+        else:
+            skipped.append(t)
+
+    if added:
+        save_watchlist()
+        msg = f"✅ **Added:** {', '.join(added)}"
+        if skipped:
+            msg += f"\n⚠️ **Skipped (Existing):** {', '.join(skipped)}"
+        await ctx.send(msg)
+    elif skipped:
+        await ctx.send(f"⚠️ All listed tickers are already in the watchlist.")
 
 
 @bot.command()
-async def remove(ctx, ticker: str):
-    """Removes a ticker from the watchlist."""
+async def remove(ctx, *tickers: str):
+    """Removes multiple tickers."""
+    if not tickers:
+        await ctx.send("⚠️ Usage: `!remove TICKER1 TICKER2 ...`")
+        return
+
+    removed = []
+    not_found = []
+
+    for t in tickers:
+        t = t.upper().replace(',', '')
+        if t in WATCHLIST:
+            WATCHLIST.remove(t)
+            removed.append(t)
+        else:
+            not_found.append(t)
+
+    if removed:
+        save_watchlist()
+        msg = f"🗑️ **Removed:** {', '.join(removed)}"
+        if not_found:
+            msg += f"\n⚠️ **Not Found:** {', '.join(not_found)}"
+        await ctx.send(msg)
+    elif not_found:
+        await ctx.send(f"⚠️ None of those tickers were in your list.")
+
+
+# --- NEW CHECK COMMAND ---
+
+@bot.command()
+async def check(ctx, ticker: str):
+    """Manually checks a ticker's stats."""
     ticker = ticker.upper()
-    if ticker in WATCHLIST:
-        WATCHLIST.remove(ticker)
-        save_watchlist()  # <--- NEW: Save changes
-        await ctx.send(f"🗑️ Removed **{ticker}** from watchlist.")
+    await ctx.send(f"🔍 Checking **{ticker}**... please wait.")
+
+    data = get_market_data(ticker, force_return=True)
+
+    if data:
+        price, rsi, bbl, bbu = data
+
+        # Determine Status visual
+        status = "NEUTRAL"
+        color = 0x95a5a6  # Grey
+        if rsi < RSI_LIMIT:
+            status = "OVERSOLD (Buy Signal)"
+            color = 0x2ecc71  # Green
+        elif rsi > (100 - RSI_LIMIT):
+            status = "OVERBOUGHT (Sell Signal)"
+            color = 0xe74c3c  # Red
+
+        embed = discord.Embed(title=f"📊 Analysis: {ticker}", color=color)
+        embed.add_field(name="Price", value=f"${price:.2f}", inline=True)
+        embed.add_field(name="RSI (14)", value=f"{rsi:.2f}", inline=True)
+        embed.add_field(name="Status", value=f"**{status}**", inline=False)
+        embed.add_field(name="Bollinger Low", value=f"${bbl:.2f}", inline=True)
+        embed.add_field(name="Bollinger High", value=f"${bbu:.2f}", inline=True)
+
+        await ctx.send(embed=embed)
     else:
-        await ctx.send(f"⚠️ **{ticker}** not found.")
+        await ctx.send(f"❌ Could not fetch data for **{ticker}**.")
 
 
 @bot.command()
@@ -235,7 +316,7 @@ async def mute(ctx, ticker: str, minutes: int):
 async def scan(ctx):
     """Silent manual scan."""
     for ticker in WATCHLIST:
-        result = get_market_data(ticker)
+        result = get_market_data(ticker, force_return=False)
         if result:
             await send_formatted_alert(ctx, ticker, *result)
         await asyncio.sleep(1)
