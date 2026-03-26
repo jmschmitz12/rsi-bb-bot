@@ -153,7 +153,8 @@ async def market_scanner():
 
     if rate_limit_cooldown:
         channel = bot.get_channel(CHANNEL_ID)
-        await channel.send("⚠️ **RATE LIMIT ALERT**: Throttled. Cooling down for 30 mins...")
+        if channel:
+            await channel.send("⚠️ **RATE LIMIT ALERT**: Throttled. Cooling down for 30 mins...")
         paused_until = datetime.now() + timedelta(minutes=30)
         rate_limit_cooldown = False
         return
@@ -164,7 +165,12 @@ async def market_scanner():
     if not is_market_open():
         return
 
+    # Validate channel connection before proceeding
     channel = bot.get_channel(CHANNEL_ID)
+    if not channel:
+        print(f"Error: Cannot resolve CHANNEL_ID {CHANNEL_ID}. Check permissions or network connection.")
+        return
+
     now = datetime.now()
     ticker_mutes = {t: time for t, time in ticker_mutes.items() if time > now}
 
@@ -172,15 +178,22 @@ async def market_scanner():
         if ticker in ticker_mutes:
             continue
 
-        result = get_market_data(ticker, force_return=False)
-        if result:
-            await send_formatted_alert(channel, ticker, *result)
+        # Handle potential API timeouts or connection drops
+        try:
+            result = get_market_data(ticker, force_return=False)
+            if result:
+                await send_formatted_alert(channel, ticker, *result)
+        except Exception as e:
+            print(f"Error processing {ticker}: {e}")
+
         await asyncio.sleep(1.5)
 
 
 @market_scanner.before_loop
 async def before_scanner():
     await bot.wait_until_ready()
+    # 30-second delay to prevent race conditions during hardware reboot
+    await asyncio.sleep(30)
 
 
 # ==========================================
