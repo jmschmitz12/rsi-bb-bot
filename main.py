@@ -93,7 +93,6 @@ async def send_formatted_alert(ctx_or_channel, ticker, signal, price, rsi, band)
     embed.add_field(name="Current Price", value=f"**${price:.2f}**", inline=True)
     embed.add_field(name="RSI (14)", value=f"**{rsi:.2f}**", inline=True)
     embed.add_field(name="Target Band", value=f"${band:.2f}", inline=True)
-    embed.set_footer(text="Market Watchdog")
 
     await ctx_or_channel.send(content=banner_text, embed=embed)
 
