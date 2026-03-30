@@ -3,5 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="Python 3.12 (Stock_Ticker_Triggers)" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.12 (Stock_Ticker_Triggers)" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.12 (rsi-bb-bot)" project-jdk-type="Python SDK" />
 </project>

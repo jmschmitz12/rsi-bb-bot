@@ -12,8 +12,8 @@ import discord
 from discord.ext import commands
 
 from alerts import send_alert
-from config import RSI_LIMIT
-from market_data import check_ticker, create_chart, scan_ticker
+from config import BB_STD, RSI_LIMIT
+from market_data import EASTERN, check_ticker, create_chart, scan_ticker
 from utils import is_bot_owner
 
 logger = logging.getLogger(__name__)
@@ -42,31 +42,60 @@ class AnalysisCog(commands.Cog, name="Analysis"):
             await ctx.send(f"❌ Could not fetch data for **{ticker}**. The ticker may be invalid.")
             return
 
-        # Determine signal status
+        # ── Signal state ──────────────────────────────────────────────────────
         if data.rsi < RSI_LIMIT:
-            status, color = "OVERSOLD (buy signal)", 0x2ECC71
+            signal, color = "OVERSOLD", 0x2ECC71
         elif data.rsi > (100 - RSI_LIMIT):
-            status, color = "OVERBOUGHT (sell signal)", 0xE74C3C
+            signal, color = "OVERBOUGHT", 0xE74C3C
         else:
-            status, color = "NEUTRAL", 0x95A5A6
+            signal, color = "NEUTRAL", 0x95A5A6
 
-        chart = await asyncio.to_thread(create_chart, data.df, ticker, data.bbl_col, data.bbu_col)
+        # ── Percentage fields (mirror alert embed logic) ───────────────────────
+        et_time = datetime.now(EASTERN).strftime("%-I:%M %p ET")
+
+        if signal == "OVERSOLD":
+            pct_outside = (data.bbl - data.price) / data.bbl * 100
+            pct_to_mid  = (data.bbm - data.price) / data.price * 100
+            field1 = ("Lower Band",    f"${data.bbl:.2f}")
+            field2 = ("% Below Band",  f"−{pct_outside:.2f}%")
+            field3 = ("% To Midline",  f"+{pct_to_mid:.2f}%")
+        elif signal == "OVERBOUGHT":
+            pct_outside = (data.price - data.bbu) / data.bbu * 100
+            pct_to_mid  = (data.price - data.bbm) / data.price * 100
+            field1 = ("Upper Band",    f"${data.bbu:.2f}")
+            field2 = ("% Above Band",  f"+{pct_outside:.2f}%")
+            field3 = ("% To Midline",  f"−{pct_to_mid:.2f}%")
+        else:
+            pct_to_upper = (data.bbu - data.price) / data.price * 100
+            pct_to_lower = (data.price - data.bbl) / data.price * 100
+            # Show which side of the midline price is on
+            above_mid = data.price >= data.bbm
+            pct_to_mid = abs(data.price - data.bbm) / data.price * 100
+            mid_str = f"−{pct_to_mid:.2f}%" if above_mid else f"+{pct_to_mid:.2f}%"
+            field1 = ("Upper Band",      f"${data.bbu:.2f}  (+{pct_to_upper:.2f}%)")
+            field2 = ("Lower Band",      f"${data.bbl:.2f}  (−{pct_to_lower:.2f}%)")
+            field3 = ("% To Midline",    mid_str)
+
+        # ── Build embed ───────────────────────────────────────────────────────
+        chart = await asyncio.to_thread(
+            create_chart, data.df, ticker, data.bbl_col, data.bbu_col, data.bbm_col
+        )
         discord_file = discord.File(fp=chart, filename=f"{ticker}_check.png")
 
-        embed = discord.Embed(
-            title=f"📊 Analysis: {ticker}",
-            color=color,
-            timestamp=datetime.now(),
-        )
-        embed.add_field(name="Price", value=f"**${data.price:.2f}**", inline=True)
-        embed.add_field(name="RSI (14)", value=f"**{data.rsi:.2f}**", inline=True)
-        embed.add_field(name="Status", value=f"**{status}**", inline=False)
-        embed.add_field(name="Bollinger Low", value=f"${data.bbl:.2f}", inline=True)
-        embed.add_field(name="Bollinger High", value=f"${data.bbu:.2f}", inline=True)
+        embed = discord.Embed(color=color, timestamp=datetime.now())
+        embed.set_author(name=f"{signal}  ·  Manual check")
+        embed.title = ticker
+        embed.description = f"**${data.price:.2f}**  ·  RSI **{data.rsi:.2f}**  ·  6-month daily"
+
+        embed.add_field(name=field1[0], value=field1[1], inline=True)
+        embed.add_field(name=field2[0], value=field2[1], inline=True)
+        embed.add_field(name=field3[0], value=field3[1], inline=True)
+
         embed.set_image(url=f"attachment://{ticker}_check.png")
+        embed.set_footer(text=f"{et_time}  ·  BB(20, {BB_STD})  ·  RSI(14)")
 
         await ctx.send(file=discord_file, embed=embed)
-        logger.info("!check %s: $%.2f RSI=%.2f [%s]", ticker, data.price, data.rsi, status)
+        logger.info("!check %s: $%.2f RSI=%.2f [%s]", ticker, data.price, data.rsi, signal)
 
     @commands.command()
     @is_bot_owner()
@@ -82,7 +111,7 @@ class AnalysisCog(commands.Cog, name="Analysis"):
                 alert = await asyncio.to_thread(scan_ticker, ticker)
                 if alert:
                     chart = await asyncio.to_thread(
-                        create_chart, alert.df, ticker, alert.bbl_col, alert.bbu_col
+                        create_chart, alert.df, ticker, alert.bbl_col, alert.bbu_col, alert.bbm_col
                     )
                     await send_alert(
                         ctx,
@@ -91,6 +120,7 @@ class AnalysisCog(commands.Cog, name="Analysis"):
                         alert.price,
                         alert.rsi,
                         alert.target_band,
+                        alert.bbm,
                         chart,
                     )
                     triggered += 1

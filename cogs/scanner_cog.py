@@ -67,7 +67,7 @@ class ScannerCog(commands.Cog, name="Scanner"):
                 alert = await asyncio.to_thread(scan_ticker, ticker)
                 if alert:
                     chart = await asyncio.to_thread(
-                        create_chart, alert.df, ticker, alert.bbl_col, alert.bbu_col
+                        create_chart, alert.df, ticker, alert.bbl_col, alert.bbu_col, alert.bbm_col
                     )
                     await send_alert(
                         channel,
@@ -76,6 +76,7 @@ class ScannerCog(commands.Cog, name="Scanner"):
                         alert.price,
                         alert.rsi,
                         alert.target_band,
+                        alert.bbm,
                         chart,
                     )
             except Exception as e:

@@ -42,8 +42,10 @@ class TickerData(NamedTuple):
     rsi: float
     bbl: float
     bbu: float
-    bbl_col: str   # e.g. "BBL_20_2.0" — kept so the chart function never re-scans
+    bbm: float         # BB midline (SMA20) — mean reversion target
+    bbl_col: str       # e.g. "BBL_20_2.0" — kept so the chart function never re-scans
     bbu_col: str
+    bbm_col: str
     df: pd.DataFrame
 
 
@@ -53,8 +55,10 @@ class ScanAlert(NamedTuple):
     price: float
     rsi: float
     target_band: float # the band that was crossed (bbl for oversold, bbu for overbought)
+    bbm: float         # BB midline (SMA20) — mean reversion target
     bbl_col: str
     bbu_col: str
+    bbm_col: str
     df: pd.DataFrame
 
 
@@ -110,8 +114,9 @@ def _fetch_and_process(ticker: str) -> TickerData | None:
 
         bbl_col = next((c for c in df.columns if c.startswith("BBL")), None)
         bbu_col = next((c for c in df.columns if c.startswith("BBU")), None)
+        bbm_col = next((c for c in df.columns if c.startswith("BBM")), None)
 
-        if not bbl_col or not bbu_col:
+        if not bbl_col or not bbu_col or not bbm_col:
             logger.warning("%s: could not locate BB columns in %s", ticker, df.columns.tolist())
             return None
 
@@ -120,8 +125,10 @@ def _fetch_and_process(ticker: str) -> TickerData | None:
             rsi=float(df["RSI"].iloc[-1]),
             bbl=float(df[bbl_col].iloc[-1]),
             bbu=float(df[bbu_col].iloc[-1]),
+            bbm=float(df[bbm_col].iloc[-1]),
             bbl_col=bbl_col,
             bbu_col=bbu_col,
+            bbm_col=bbm_col,
             df=df,
         )
 
@@ -152,8 +159,10 @@ def scan_ticker(ticker: str) -> ScanAlert | None:
             price=data.price,
             rsi=data.rsi,
             target_band=data.bbl,
+            bbm=data.bbm,
             bbl_col=data.bbl_col,
             bbu_col=data.bbu_col,
+            bbm_col=data.bbm_col,
             df=data.df,
         )
 
@@ -163,8 +172,10 @@ def scan_ticker(ticker: str) -> ScanAlert | None:
             price=data.price,
             rsi=data.rsi,
             target_band=data.bbu,
+            bbm=data.bbm,
             bbl_col=data.bbl_col,
             bbu_col=data.bbu_col,
+            bbm_col=data.bbm_col,
             df=data.df,
         )
 
@@ -179,6 +190,35 @@ def check_ticker(ticker: str) -> TickerData | None:
     return _fetch_and_process(ticker)
 
 
+# ── Custom chart style ────────────────────────────────────────────────────────
+
+_MARKET_COLORS = mpf.make_marketcolors(
+    up="#2ecc71",       # green candles
+    down="#e74c3c",     # red candles
+    edge="inherit",
+    wick="inherit",
+    ohlc="inherit",
+)
+
+_CHART_STYLE = mpf.make_mpf_style(
+    base_mpf_style="nightclouds",
+    marketcolors=_MARKET_COLORS,
+    figcolor="#1e1f22",         # outer figure background
+    facecolor="#2b2d31",        # chart panel background
+    gridcolor="#3a3b3c",
+    gridstyle="--",
+    gridaxis="both",
+    y_on_right=True,
+    rc={
+        "axes.labelcolor":  "#b5bac1",
+        "axes.edgecolor":   "#3a3b3c",
+        "xtick.color":      "#87898c",
+        "ytick.color":      "#87898c",
+        "font.size":        9,
+    },
+)
+
+
 # ── Charting ──────────────────────────────────────────────────────────────────
 
 def create_chart(
@@ -186,9 +226,11 @@ def create_chart(
     ticker: str,
     bbl_col: str,
     bbu_col: str,
+    bbm_col: str,
 ) -> io.BytesIO:
     """
-    Render a 50-candle candlestick chart with Bollinger Bands and RSI.
+    Render a 50-candle candlestick chart with Bollinger Bands, midline, and RSI
+    using a custom dark theme.
 
     Column names are passed in from the caller (detected once in
     _fetch_and_process) rather than re-scanned here.
@@ -199,23 +241,32 @@ def create_chart(
     image_stream = io.BytesIO()
 
     extra_plots = [
-        mpf.make_addplot(plot_df[bbu_col], color="orange", width=0.8, panel=0),
-        mpf.make_addplot(plot_df[bbl_col], color="orange", width=0.8, panel=0),
-        mpf.make_addplot(plot_df["RSI"], color="purple", width=2.0, panel=1, ylabel="RSI"),
+        mpf.make_addplot(plot_df[bbu_col], color="#f39c12", width=1.0, panel=0),
+        mpf.make_addplot(plot_df[bbm_col], color="#f39c12", width=0.6, linestyle="--", panel=0),
+        mpf.make_addplot(plot_df[bbl_col], color="#f39c12", width=1.0, panel=0),
+        mpf.make_addplot(
+            plot_df["RSI"],
+            color="#9b59b6",
+            width=1.8,
+            panel=1,
+            ylabel="RSI",
+            ylim=(0, 100),
+        ),
     ]
 
     mpf.plot(
         plot_df,
         type="candle",
-        style="charles",
+        style=_CHART_STYLE,
         addplot=extra_plots,
-        title=f"\n{ticker} — Technical Analysis",
+        title=f"\n{ticker}  —  BB(20, {BB_STD})  ·  RSI(14)",
         volume=False,
         ylabel="Price",
         panel_ratios=(3, 1),
-        figratio=(10, 6),
-        figscale=1.2,
-        savefig=dict(fname=image_stream, format="png", bbox_inches="tight"),
+        figratio=(10, 5),
+        figscale=1.3,
+        tight_layout=True,
+        savefig=dict(fname=image_stream, format="png", bbox_inches="tight", dpi=130),
     )
 
     image_stream.seek(0)
