@@ -1,1 +1,1 @@
-venv/.env__pycache__/*.log
+.env__pycache__/*.logvenv/

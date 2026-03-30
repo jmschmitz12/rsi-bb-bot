@@ -1,0 +1,8 @@
+discord.py>=2.0
+yfinance
+pandas
+pandas-ta
+mplfinance
+holidays
+python-dotenv
+pytz
