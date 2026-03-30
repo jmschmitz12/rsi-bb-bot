@@ -29,6 +29,7 @@ class ScannerCog(commands.Cog, name="Scanner"):
     @tasks.loop(minutes=POLL_SPEED_MINUTES)
     async def scanner_loop(self) -> None:
         state = self.bot.state
+        logger.info("Scanner loop fired")
 
         # ── Rate limit recovery ────────────────────────────────────────────────
         if state.rate_limit_cooldown:
@@ -88,10 +89,17 @@ class ScannerCog(commands.Cog, name="Scanner"):
 
             await asyncio.sleep(1.5)   # be courteous to the yfinance API
 
+    @scanner_loop.error
+    async def scanner_loop_error(self, error: Exception) -> None:
+        """
+        Catches any unhandled exception in the loop body.
+        Without this, discord.py silently kills the loop on the first error.
+        """
+        logger.exception("Scanner loop crashed — will resume on next interval: %s", error)
+
     @scanner_loop.before_loop
     async def before_scanner(self) -> None:
         await self.bot.wait_until_ready()
-        # Brief delay on startup to avoid hammering the API during a Pi reboot
         await asyncio.sleep(30)
         logger.info("Scanner loop starting")
 
