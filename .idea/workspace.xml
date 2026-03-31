@@ -5,7 +5,6 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="aed37d0c-b9d6-4098-9155-bdd9ed055c31" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/cogs/scanner_cog.py" beforeDir="false" afterPath="$PROJECT_DIR$/cogs/scanner_cog.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -81,7 +80,7 @@
       <option name="presentableId" value="Default" />
       <updated>1768618273682</updated>
       <workItem from="1774806198844" duration="13671000" />
-      <workItem from="1774910415069" duration="530000" />
+      <workItem from="1774910415069" duration="1217000" />
     </task>
     <servers />
   </component>
@@ -89,6 +88,6 @@
     <option name="version" value="3" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
-    <SUITE FILE_PATH="coverage/rsi_bb_bot$main.coverage" NAME="main Coverage Results" MODIFIED="1774880456525" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/rsi_bb_bot$main.coverage" NAME="main Coverage Results" MODIFIED="1774910945996" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>
 </project>
