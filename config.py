@@ -13,7 +13,7 @@ RSI_LIMIT: float = 30.0          # oversold threshold; 100 - RSI_LIMIT = overbou
 BB_STD: float = 2.0              # Bollinger Band standard deviation multiplier
 POLL_SPEED_MINUTES: int = 5      # how often the background scanner runs
 RATE_LIMIT_COOLDOWN_MINUTES: int = 30
-AUTO_MUTE_HOURS: int = 4             # how long to suppress repeat alerts after a signal fires
+AUTO_MUTE_HOURS: int = 1             # how long to suppress repeat alerts after a signal fires
 
 # ── Persistence ────────────────────────────────────────────────────────────────
 WATCHLIST_FILE: str = "watchlist.json"

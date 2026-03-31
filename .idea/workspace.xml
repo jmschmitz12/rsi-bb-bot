@@ -4,9 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="aed37d0c-b9d6-4098-9155-bdd9ed055c31" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/cogs/scanner_cog.py" beforeDir="false" afterPath="$PROJECT_DIR$/cogs/scanner_cog.py" afterDir="false" />
-    </list>
+    <list default="true" id="aed37d0c-b9d6-4098-9155-bdd9ed055c31" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -80,7 +78,7 @@
       <option name="presentableId" value="Default" />
       <updated>1768618273682</updated>
       <workItem from="1774806198844" duration="13671000" />
-      <workItem from="1774910415069" duration="1217000" />
+      <workItem from="1774910415069" duration="1975000" />
     </task>
     <servers />
   </component>
