@@ -1,9 +1,9 @@
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from config import DEFAULT_WATCHLIST, WATCHLIST_FILE
+from config import DEFAULT_WATCHLIST, MUTES_FILE, WATCHLIST_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class BotState:
         self.watchlist: list[str] = self._load_watchlist()
         self.paused_until: datetime | None = None
         self.rate_limit_cooldown: bool = False
-        self.ticker_mutes: dict[str, datetime] = {}
+        self.ticker_mutes: dict[str, datetime] = self._load_mutes()
 
     # ── Watchlist persistence ──────────────────────────────────────────────────
 
@@ -45,6 +45,39 @@ class BotState:
             logger.info("Watchlist saved (%d tickers)", len(self.watchlist))
         except Exception:
             logger.exception("Failed to save watchlist")
+
+    # ── Mute persistence ──────────────────────────────────────────────────────
+
+    def _load_mutes(self) -> dict[str, datetime]:
+        if not os.path.exists(MUTES_FILE):
+            return {}
+        try:
+            with open(MUTES_FILE, "r") as f:
+                raw: dict[str, str] = json.load(f)
+            now = datetime.now()
+            return {
+                ticker: exp
+                for ticker, s in raw.items()
+                if (exp := datetime.fromisoformat(s)) > now
+            }
+        except Exception:
+            logger.exception("Failed to load mutes — starting with none")
+            return {}
+
+    def save_mutes(self) -> None:
+        """Write active mutes to disk. Call via asyncio.to_thread()."""
+        try:
+            now = datetime.now()
+            active = {t: exp.isoformat() for t, exp in self.ticker_mutes.items() if exp > now}
+            with open(MUTES_FILE, "w") as f:
+                json.dump(active, f)
+        except Exception:
+            logger.exception("Failed to save mutes")
+
+    def mute_ticker(self, ticker: str, minutes: int) -> None:
+        """Set a mute and persist it to disk immediately."""
+        self.ticker_mutes[ticker] = datetime.now() + timedelta(minutes=minutes)
+        self.save_mutes()
 
     # ── Mute management ───────────────────────────────────────────────────────
 

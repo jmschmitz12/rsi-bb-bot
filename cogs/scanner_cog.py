@@ -15,7 +15,7 @@ import pytz
 from discord.ext import commands
 
 from alerts import send_alert
-from config import CHANNEL_ID, POLL_SPEED_MINUTES, RATE_LIMIT_COOLDOWN_MINUTES, TIMEZONE
+from config import AUTO_MUTE_HOURS, CHANNEL_ID, POLL_SPEED_MINUTES, RATE_LIMIT_COOLDOWN_MINUTES, TIMEZONE
 from market_data import create_chart, is_market_open, scan_ticker
 
 logger = logging.getLogger(__name__)
@@ -137,6 +137,7 @@ class ScannerCog(commands.Cog, name="Scanner"):
                             alert.bbm,
                             chart,
                         )
+                        await asyncio.to_thread(state.mute_ticker, ticker, AUTO_MUTE_HOURS * 60)
                 except Exception as e:
                     if "429" in str(e):
                         state.rate_limit_cooldown = True

@@ -13,9 +13,11 @@ RSI_LIMIT: float = 30.0          # oversold threshold; 100 - RSI_LIMIT = overbou
 BB_STD: float = 2.0              # Bollinger Band standard deviation multiplier
 POLL_SPEED_MINUTES: int = 5      # how often the background scanner runs
 RATE_LIMIT_COOLDOWN_MINUTES: int = 30
+AUTO_MUTE_HOURS: int = 4             # how long to suppress repeat alerts after a signal fires
 
 # ── Persistence ────────────────────────────────────────────────────────────────
 WATCHLIST_FILE: str = "watchlist.json"
+MUTES_FILE: str = "mutes.json"
 LOG_FILE: str = "bot.log"
 LOG_MAX_BYTES: int = 5 * 1024 * 1024  # 5 MB per log file
 LOG_BACKUP_COUNT: int = 7             # keep 7 rotated files (~35 MB total)

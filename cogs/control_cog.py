@@ -4,6 +4,7 @@ cogs/control_cog.py
 Commands: !pause, !resume, !mute, !status
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 
@@ -31,7 +32,7 @@ class ControlCog(commands.Cog, name="Control"):
             await ctx.send(f"⚠️ **{ticker}** is not in the watchlist.")
             return
 
-        state.ticker_mutes[ticker] = datetime.now() + timedelta(minutes=minutes)
+        await asyncio.to_thread(state.mute_ticker, ticker, minutes)
         logger.info("%s muted by %s for %d minutes", ticker, ctx.author, minutes)
         await ctx.send(f"🔇 **{ticker}** alerts muted for {minutes} minutes.")
 
