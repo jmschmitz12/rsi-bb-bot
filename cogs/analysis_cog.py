@@ -42,10 +42,10 @@ class AnalysisCog(commands.Cog, name="Analysis"):
             await ctx.send(f"❌ Could not fetch data for **{ticker}**. The ticker may be invalid.")
             return
 
-        # ── Signal state ──────────────────────────────────────────────────────
-        if data.rsi < RSI_LIMIT:
+        # ── Signal state — mirrors scan_ticker() dual-condition logic ────────
+        if data.price < data.bbl and data.rsi < RSI_LIMIT:
             signal, color = "OVERSOLD", 0x2ECC71
-        elif data.rsi > (100 - RSI_LIMIT):
+        elif data.price > data.bbu and data.rsi > (100 - RSI_LIMIT):
             signal, color = "OVERBOUGHT", 0xE74C3C
         else:
             signal, color = "NEUTRAL", 0x95A5A6
