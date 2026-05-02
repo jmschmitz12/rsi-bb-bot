@@ -13,6 +13,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta
+from io import StringIO
 
 import pandas as pd
 import requests
@@ -38,7 +39,8 @@ def _is_cache_stale() -> bool:
 def _fetch_from_wikipedia() -> list[str]:
     response = requests.get(_WIKIPEDIA_URL, headers={"User-Agent": _USER_AGENT}, timeout=15)
     response.raise_for_status()
-    tables = pd.read_html(response.text)
+    # pandas 2.x rejects raw HTML strings as a path — wrap in StringIO.
+    tables = pd.read_html(StringIO(response.text))
     symbols = tables[0]["Symbol"].astype(str).tolist()
     return [s.strip().replace(".", "-") for s in symbols]
 
