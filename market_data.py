@@ -85,53 +85,61 @@ def is_market_open() -> bool:
 
 # ── Core data pipeline ────────────────────────────────────────────────────────
 
+def _compute_indicators(ticker: str, df: pd.DataFrame) -> TickerData | None:
+    """
+    Compute RSI(14) + BB(20) on an already-downloaded OHLCV DataFrame.
+
+    Pure: no I/O. Used by both the single-ticker and batch paths.
+    Returns None on insufficient or malformed data.
+    """
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    df = df.dropna(subset=["Close"])
+    if df.empty or len(df) < 20:
+        logger.warning("%s: insufficient data (%d rows)", ticker, len(df))
+        return None
+
+    df = df.copy()
+    df["RSI"] = ta.rsi(df["Close"], length=14)
+
+    bb = ta.bbands(df["Close"], length=20, std=BB_STD)
+    if bb is None:
+        logger.warning("%s: Bollinger Band calculation returned None", ticker)
+        return None
+
+    df = pd.concat([df, bb], axis=1)
+
+    bbl_col = next((c for c in df.columns if c.startswith("BBL")), None)
+    bbu_col = next((c for c in df.columns if c.startswith("BBU")), None)
+    bbm_col = next((c for c in df.columns if c.startswith("BBM")), None)
+
+    if not bbl_col or not bbu_col or not bbm_col:
+        logger.warning("%s: could not locate BB columns in %s", ticker, df.columns.tolist())
+        return None
+
+    return TickerData(
+        price=float(df["Close"].iloc[-1]),
+        rsi=float(df["RSI"].iloc[-1]),
+        bbl=float(df[bbl_col].iloc[-1]),
+        bbu=float(df[bbu_col].iloc[-1]),
+        bbm=float(df[bbm_col].iloc[-1]),
+        bbl_col=bbl_col,
+        bbu_col=bbu_col,
+        bbm_col=bbm_col,
+        df=df,
+    )
+
+
 def _fetch_and_process(ticker: str) -> TickerData | None:
     """
-    Download 6 months of daily OHLCV data and compute RSI(14) + BB(20).
+    Download 6 months of daily OHLCV data for one ticker and compute indicators.
 
-    Returns a TickerData on success, None on bad data.
-    Re-raises on HTTP 429 so callers can trigger a rate-limit cooldown.
+    Re-raises HTTP 429 so callers can trigger a rate-limit cooldown.
     """
     try:
         df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-
-        # Newer yfinance versions return a MultiIndex — flatten it
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-
-        if df.empty or len(df) < 20:
-            logger.warning("%s: insufficient data (%d rows)", ticker, len(df))
-            return None
-
-        df["RSI"] = ta.rsi(df["Close"], length=14)
-
-        bb = ta.bbands(df["Close"], length=20, std=BB_STD)
-        if bb is None:
-            logger.warning("%s: Bollinger Band calculation returned None", ticker)
-            return None
-
-        df = pd.concat([df, bb], axis=1)
-
-        bbl_col = next((c for c in df.columns if c.startswith("BBL")), None)
-        bbu_col = next((c for c in df.columns if c.startswith("BBU")), None)
-        bbm_col = next((c for c in df.columns if c.startswith("BBM")), None)
-
-        if not bbl_col or not bbu_col or not bbm_col:
-            logger.warning("%s: could not locate BB columns in %s", ticker, df.columns.tolist())
-            return None
-
-        return TickerData(
-            price=float(df["Close"].iloc[-1]),
-            rsi=float(df["RSI"].iloc[-1]),
-            bbl=float(df[bbl_col].iloc[-1]),
-            bbu=float(df[bbu_col].iloc[-1]),
-            bbm=float(df[bbm_col].iloc[-1]),
-            bbl_col=bbl_col,
-            bbu_col=bbu_col,
-            bbm_col=bbm_col,
-            df=df,
-        )
-
+        return _compute_indicators(ticker, df)
     except Exception as e:
         if "429" in str(e):
             logger.error("%s: rate limit hit (429) — re-raising", ticker)
@@ -140,19 +148,44 @@ def _fetch_and_process(ticker: str) -> TickerData | None:
         return None
 
 
-# ── Public entry points ───────────────────────────────────────────────────────
-
-def scan_ticker(ticker: str) -> ScanAlert | None:
+def fetch_batch(tickers: list[str]) -> dict[str, TickerData]:
     """
-    Check whether a ticker has triggered an oversold or overbought signal.
+    Batch-download 6 months of OHLCV for many tickers in a single yfinance call,
+    then compute RSI + BB locally for each. Far fewer HTTP requests than a loop.
 
-    Returns a ScanAlert if conditions are met, None otherwise.
-    Propagates HTTP 429 exceptions so the scanner loop can handle cooldown.
+    Returns ticker → TickerData for every successful symbol; failures are silently
+    dropped (logged at warning level). Re-raises HTTP 429 so the caller can abort.
     """
-    data = _fetch_and_process(ticker)
-    if data is None:
-        return None
+    if not tickers:
+        return {}
 
+    df = yf.download(
+        tickers,
+        period="6mo",
+        interval="1d",
+        progress=False,
+        group_by="ticker",
+        threads=True,
+    )
+
+    results: dict[str, TickerData] = {}
+    for ticker in tickers:
+        try:
+            # Single-ticker batches don't get a MultiIndex; multi-ticker do.
+            ticker_df = df[ticker] if len(tickers) > 1 else df
+            data = _compute_indicators(ticker, ticker_df)
+            if data is not None:
+                results[ticker] = data
+        except KeyError:
+            logger.warning("%s: missing in batch download response", ticker)
+        except Exception as e:
+            logger.warning("%s: batch processing error — %s", ticker, e)
+
+    return results
+
+
+def alert_from_data(data: TickerData) -> ScanAlert | None:
+    """Apply the dual-condition signal rule to an already-computed TickerData."""
     if data.price < data.bbl and data.rsi < RSI_LIMIT:
         return ScanAlert(
             signal="OVERSOLD",
@@ -180,6 +213,21 @@ def scan_ticker(ticker: str) -> ScanAlert | None:
         )
 
     return None
+
+
+# ── Public entry points ───────────────────────────────────────────────────────
+
+def scan_ticker(ticker: str) -> ScanAlert | None:
+    """
+    Check whether a ticker has triggered an oversold or overbought signal.
+
+    Returns a ScanAlert if conditions are met, None otherwise.
+    Propagates HTTP 429 exceptions so the scanner loop can handle cooldown.
+    """
+    data = _fetch_and_process(ticker)
+    if data is None:
+        return None
+    return alert_from_data(data)
 
 
 def check_ticker(ticker: str) -> TickerData | None:

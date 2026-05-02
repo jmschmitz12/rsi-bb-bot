@@ -6,3 +6,4 @@ mplfinance
 holidays
 python-dotenv
 pytz
+lxml

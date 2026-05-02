@@ -13,8 +13,20 @@ from discord.ext import commands
 
 from alerts import send_alert
 from config import BB_STD, RSI_LIMIT
-from market_data import EASTERN, check_ticker, create_chart, scan_ticker
+from market_data import (
+    EASTERN,
+    alert_from_data,
+    check_ticker,
+    create_chart,
+    fetch_batch,
+    scan_ticker,
+)
+from sp500 import get_sp500_tickers
 from utils import is_bot_owner
+
+SP500_CHUNK_SIZE = 50
+SP500_CHUNK_DELAY_SECONDS = 2.0
+ALERT_SEND_DELAY_SECONDS = 1.0
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +111,22 @@ class AnalysisCog(commands.Cog, name="Analysis"):
 
     @commands.command()
     @is_bot_owner()
-    async def scan(self, ctx: commands.Context) -> None:
-        """Manually triggers a full watchlist scan and reports any signals."""
+    async def scan(self, ctx: commands.Context, mode: str = None) -> None:
+        """
+        Manually triggers a scan and reports any signals.
+
+        Usage:
+            !scan          – scans your watchlist (fast)
+            !scan sp500    – scans all S&P 500 tickers via batch download (slow)
+        """
+        if mode is None:
+            await self._scan_watchlist(ctx)
+        elif mode.lower() == "sp500":
+            await self._scan_sp500(ctx)
+        else:
+            await ctx.send(f"❌ Unknown scan mode: `{mode}`. Use `!scan` or `!scan sp500`.")
+
+    async def _scan_watchlist(self, ctx: commands.Context) -> None:
         state = self.bot.state
         triggered = 0
 
@@ -137,6 +163,95 @@ class AnalysisCog(commands.Cog, name="Analysis"):
             await ctx.send("✅ Scan complete — no signals triggered.")
         else:
             await ctx.send(f"✅ Scan complete — {triggered} signal(s) fired.")
+
+    async def _scan_sp500(self, ctx: commands.Context) -> None:
+        try:
+            tickers = await asyncio.to_thread(get_sp500_tickers)
+        except Exception as e:
+            logger.error("S&P 500 list load failed: %s", e)
+            await ctx.send(f"❌ Could not load S&P 500 list: {e}")
+            return
+
+        chunks = [
+            tickers[i : i + SP500_CHUNK_SIZE]
+            for i in range(0, len(tickers), SP500_CHUNK_SIZE)
+        ]
+        await ctx.send(
+            f"🔍 Scanning S&P 500 — {len(tickers)} tickers in {len(chunks)} batches. "
+            f"This will take a few minutes..."
+        )
+
+        triggered: list[tuple[str, object]] = []
+        succeeded = 0
+
+        for i, chunk in enumerate(chunks, 1):
+            try:
+                batch = await asyncio.to_thread(fetch_batch, chunk)
+            except Exception as e:
+                if "429" in str(e):
+                    await ctx.send(
+                        f"⚠️ Rate limited at batch {i}/{len(chunks)} — scan aborted early."
+                    )
+                    logger.warning("!scan sp500 aborted at chunk %d due to rate limit", i)
+                    return
+                logger.error("!scan sp500 batch %d error: %s", i, e)
+                continue
+
+            succeeded += len(batch)
+            for ticker, data in batch.items():
+                alert = alert_from_data(data)
+                if alert:
+                    triggered.append((ticker, alert))
+
+            await asyncio.sleep(SP500_CHUNK_DELAY_SECONDS)
+
+        failed = len(tickers) - succeeded
+
+        if not triggered:
+            await ctx.send(
+                f"✅ S&P 500 scan complete — no signals triggered "
+                f"({succeeded} processed, {failed} failed)."
+            )
+            return
+
+        oversold = sum(1 for _, a in triggered if a.signal == "OVERSOLD")
+        overbought = len(triggered) - oversold
+        summary = (
+            f"✅ S&P 500 scan complete — **{len(triggered)} signal(s)** "
+            f"({oversold} oversold, {overbought} overbought)"
+        )
+        if failed:
+            summary += f"  ·  {failed} tickers failed"
+        await ctx.send(summary)
+
+        # Sort by signal magnitude — most extreme first.
+        def magnitude(item: tuple[str, object]) -> float:
+            _, a = item
+            if a.signal == "OVERSOLD":
+                return (a.target_band - a.price) / a.target_band
+            return (a.price - a.target_band) / a.target_band
+
+        triggered.sort(key=magnitude, reverse=True)
+
+        for ticker, alert in triggered:
+            try:
+                chart = await asyncio.to_thread(
+                    create_chart, alert.df, ticker, alert.bbl_col, alert.bbu_col, alert.bbm_col
+                )
+                await send_alert(
+                    ctx,
+                    ticker,
+                    alert.signal,
+                    alert.price,
+                    alert.rsi,
+                    alert.target_band,
+                    alert.bbm,
+                    chart,
+                )
+            except Exception as e:
+                logger.error("!scan sp500 alert send failed for %s: %s", ticker, e)
+
+            await asyncio.sleep(ALERT_SEND_DELAY_SECONDS)
 
 
 async def setup(bot: commands.Bot) -> None:
