@@ -15,12 +15,17 @@ import os
 from datetime import datetime, timedelta
 
 import pandas as pd
+import requests
 
 logger = logging.getLogger(__name__)
 
 _CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sp500.json")
 _CACHE_TTL = timedelta(days=7)
 _WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+
+# Wikipedia rejects pandas' default urllib User-Agent with 403. Their policy
+# asks for a descriptive UA identifying the app + contact, hence the repo URL.
+_USER_AGENT = "rsi-bb-bot/1.0 (https://github.com/jmschmitz12/rsi-bb-bot)"
 
 
 def _is_cache_stale() -> bool:
@@ -31,7 +36,9 @@ def _is_cache_stale() -> bool:
 
 
 def _fetch_from_wikipedia() -> list[str]:
-    tables = pd.read_html(_WIKIPEDIA_URL)
+    response = requests.get(_WIKIPEDIA_URL, headers={"User-Agent": _USER_AGENT}, timeout=15)
+    response.raise_for_status()
+    tables = pd.read_html(response.text)
     symbols = tables[0]["Symbol"].astype(str).tolist()
     return [s.strip().replace(".", "-") for s in symbols]
 
