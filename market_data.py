@@ -277,7 +277,7 @@ def create_chart(
     bbm_col: str,
 ) -> io.BytesIO:
     """
-    Render a 50-candle candlestick chart with Bollinger Bands, midline, and RSI
+    Render a 50-candle candlestick chart with Bollinger Bands and RSI
     using a custom dark theme.
 
     Column names are passed in from the caller (detected once in
@@ -291,32 +291,41 @@ def create_chart(
     rsi_30 = pd.Series(30, index=plot_df.index)
     rsi_70 = pd.Series(70, index=plot_df.index)
 
+    # BB envelope: thin outer lines only (midline removed to reduce clutter).
     # Volume is panel 1 (auto-inserted by mplfinance); RSI shifts to panel 2.
     extra_plots = [
-        mpf.make_addplot(plot_df[bbu_col], color="#f39c12", width=1.0, panel=0),
-        mpf.make_addplot(plot_df[bbm_col], color="#f39c12", width=0.6, linestyle="--", panel=0),
-        mpf.make_addplot(plot_df[bbl_col], color="#f39c12", width=1.0, panel=0),
+        mpf.make_addplot(plot_df[bbu_col], color="#c8922a", width=0.8, panel=0),
+        mpf.make_addplot(plot_df[bbl_col], color="#c8922a", width=0.8, panel=0),
         mpf.make_addplot(
             plot_df["RSI"],
             color="#9b59b6",
-            width=1.8,
+            width=1.5,
             panel=2,
             ylabel="RSI",
             ylim=(0, 100),
         ),
-        mpf.make_addplot(rsi_30, color="#2ecc71", width=0.8, linestyle="--", panel=2),
-        mpf.make_addplot(rsi_70, color="#e74c3c", width=0.8, linestyle="--", panel=2),
+        mpf.make_addplot(rsi_30, color="#2ecc71", width=0.7, linestyle="--", panel=2),
+        mpf.make_addplot(rsi_70, color="#e74c3c", width=0.7, linestyle="--", panel=2),
     ]
+
+    # Subtle fill between BB upper and lower bands.
+    bb_fill = dict(
+        y1=plot_df[bbu_col].values,
+        y2=plot_df[bbl_col].values,
+        alpha=0.07,
+        color="#c8922a",
+    )
 
     mpf.plot(
         plot_df,
         type="candle",
         style=_CHART_STYLE,
         addplot=extra_plots,
+        fill_between=bb_fill,
         title=f"\n{ticker}  —  BB(20, {BB_STD})  ·  RSI(14)",
         volume=True,
         ylabel="Price",
-        panel_ratios=(3, 1, 1),
+        panel_ratios=(4, 0.6, 1.4),
         figratio=(10, 6),
         figscale=1.3,
         tight_layout=True,
