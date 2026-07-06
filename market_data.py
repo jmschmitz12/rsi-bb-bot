@@ -288,24 +288,12 @@ def create_chart(
     plot_df = df.tail(50)
     image_stream = io.BytesIO()
 
-    rsi_30 = pd.Series(30, index=plot_df.index)
-    rsi_70 = pd.Series(70, index=plot_df.index)
-
-    # BB envelope: thin outer lines only (midline removed to reduce clutter).
-    # Volume is panel 1 (auto-inserted by mplfinance); RSI shifts to panel 2.
+    # BB envelope: thin outer lines only, no midline.
+    # Volume is panel 1 (auto-inserted); RSI shifts to panel 2.
     extra_plots = [
         mpf.make_addplot(plot_df[bbu_col], color="#c8922a", width=0.8, panel=0),
         mpf.make_addplot(plot_df[bbl_col], color="#c8922a", width=0.8, panel=0),
-        mpf.make_addplot(
-            plot_df["RSI"],
-            color="#9b59b6",
-            width=1.5,
-            panel=2,
-            ylabel="RSI",
-            ylim=(0, 100),
-        ),
-        mpf.make_addplot(rsi_30, color="#2ecc71", width=0.7, linestyle="--", panel=2),
-        mpf.make_addplot(rsi_70, color="#e74c3c", width=0.7, linestyle="--", panel=2),
+        mpf.make_addplot(plot_df["RSI"], color="#9b59b6", width=1.5, panel=2, ylabel="RSI"),
     ]
 
     # Subtle fill between BB upper and lower bands.
@@ -316,7 +304,7 @@ def create_chart(
         color="#c8922a",
     )
 
-    mpf.plot(
+    fig, axes = mpf.plot(
         plot_df,
         type="candle",
         style=_CHART_STYLE,
@@ -329,8 +317,17 @@ def create_chart(
         figratio=(10, 6),
         figscale=1.3,
         tight_layout=True,
-        savefig=dict(fname=image_stream, format="png", bbox_inches="tight", dpi=130),
+        returnfig=True,
     )
+
+    # Draw RSI threshold lines via matplotlib to avoid y-axis scale conflicts.
+    # With y_on_right=True and 3 panels, axes are: [price, price_r, vol, vol_r, rsi, rsi_r]
+    rsi_ax = axes[4]
+    rsi_ax.set_ylim(0, 100)
+    rsi_ax.axhline(30, color="#2ecc71", linewidth=0.7, linestyle="--", alpha=0.8)
+    rsi_ax.axhline(70, color="#e74c3c", linewidth=0.7, linestyle="--", alpha=0.8)
+
+    fig.savefig(image_stream, format="png", bbox_inches="tight", dpi=130)
 
     image_stream.seek(0)
     return image_stream
