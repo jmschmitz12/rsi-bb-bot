@@ -21,7 +21,7 @@ from market_data import (
     fetch_batch,
     scan_ticker,
 )
-from sp500 import get_sp500_tickers
+from sp500 import get_sp500_names, get_sp500_tickers
 from utils import is_bot_owner
 
 SP500_CHUNK_SIZE = 50
@@ -172,6 +172,8 @@ class AnalysisCog(commands.Cog, name="Analysis"):
             await ctx.send(f"❌ Could not load S&P 500 list: {e}")
             return
 
+        names = await asyncio.to_thread(get_sp500_names)
+
         chunks = [
             tickers[i : i + SP500_CHUNK_SIZE]
             for i in range(0, len(tickers), SP500_CHUNK_SIZE)
@@ -247,6 +249,7 @@ class AnalysisCog(commands.Cog, name="Analysis"):
                     alert.target_band,
                     alert.bbm,
                     chart,
+                    company_name=names.get(ticker),
                 )
             except Exception as e:
                 logger.error("!scan sp500 alert send failed for %s: %s", ticker, e)

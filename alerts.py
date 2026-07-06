@@ -50,6 +50,7 @@ async def send_alert(
     target_band: float,
     bbm: float,
     chart: io.BytesIO,
+    company_name: str | None = None,
 ) -> None:
     """
     Send a formatted signal alert to a channel or context.
@@ -82,7 +83,8 @@ async def send_alert(
     embed = discord.Embed(color=color, timestamp=datetime.now())
     embed.set_author(name=f"{signal}  ·  BB + RSI signal")
     embed.title = ticker
-    embed.description = f"**${price:.2f}**  ·  RSI **{rsi:.2f}**  ·  6-month daily"
+    name_line = f"{company_name}\n" if company_name else ""
+    embed.description = f"{name_line}**${price:.2f}**  ·  RSI **{rsi:.2f}**  ·  6-month daily"
 
     embed.add_field(name=band_label,     value=f"${target_band:.2f}", inline=True)
     embed.add_field(name=outside_label,  value=pct_outside_str,       inline=True)
