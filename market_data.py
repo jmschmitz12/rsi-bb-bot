@@ -288,6 +288,10 @@ def create_chart(
     plot_df = df.tail(50)
     image_stream = io.BytesIO()
 
+    rsi_30 = pd.Series(30, index=plot_df.index)
+    rsi_70 = pd.Series(70, index=plot_df.index)
+
+    # Volume is panel 1 (auto-inserted by mplfinance); RSI shifts to panel 2.
     extra_plots = [
         mpf.make_addplot(plot_df[bbu_col], color="#f39c12", width=1.0, panel=0),
         mpf.make_addplot(plot_df[bbm_col], color="#f39c12", width=0.6, linestyle="--", panel=0),
@@ -296,10 +300,12 @@ def create_chart(
             plot_df["RSI"],
             color="#9b59b6",
             width=1.8,
-            panel=1,
+            panel=2,
             ylabel="RSI",
             ylim=(0, 100),
         ),
+        mpf.make_addplot(rsi_30, color="#2ecc71", width=0.8, linestyle="--", panel=2),
+        mpf.make_addplot(rsi_70, color="#e74c3c", width=0.8, linestyle="--", panel=2),
     ]
 
     mpf.plot(
@@ -308,10 +314,10 @@ def create_chart(
         style=_CHART_STYLE,
         addplot=extra_plots,
         title=f"\n{ticker}  —  BB(20, {BB_STD})  ·  RSI(14)",
-        volume=False,
+        volume=True,
         ylabel="Price",
-        panel_ratios=(3, 1),
-        figratio=(10, 5),
+        panel_ratios=(3, 1, 1),
+        figratio=(10, 6),
         figscale=1.3,
         tight_layout=True,
         savefig=dict(fname=image_stream, format="png", bbox_inches="tight", dpi=130),
