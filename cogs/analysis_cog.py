@@ -11,7 +11,7 @@ from datetime import datetime
 import discord
 from discord.ext import commands
 
-from alerts import send_alert
+from alerts import format_day_change, send_alert
 from config import BB_STD, RSI_LIMIT
 from market_data import (
     EASTERN,
@@ -19,6 +19,7 @@ from market_data import (
     check_ticker,
     create_chart,
     fetch_batch,
+    get_company_name,
     scan_ticker,
 )
 from sp500 import get_sp500_names, get_sp500_tickers
@@ -54,6 +55,10 @@ class AnalysisCog(commands.Cog, name="Analysis"):
             await ctx.send(f"❌ Could not fetch data for **{ticker}**. The ticker may be invalid.")
             return
 
+        company_name = await asyncio.to_thread(get_company_name, ticker)
+        title = f"{ticker} — {company_name}" if company_name else ticker
+        change_str = format_day_change(data.day_change, data.day_change_pct)
+
         # ── Signal state — mirrors scan_ticker() dual-condition logic ────────
         if data.price < data.bbl and data.rsi < RSI_LIMIT:
             signal, color = "OVERSOLD", 0x2ECC71
@@ -62,31 +67,26 @@ class AnalysisCog(commands.Cog, name="Analysis"):
         else:
             signal, color = "NEUTRAL", 0x95A5A6
 
-        # ── Percentage fields (mirror alert embed logic) ───────────────────────
         et_time = datetime.now(EASTERN).strftime("%-I:%M %p ET")
 
         if signal == "OVERSOLD":
             pct_outside = (data.bbl - data.price) / data.bbl * 100
             pct_to_mid  = (data.bbm - data.price) / data.price * 100
-            field1 = ("Lower Band",    f"${data.bbl:.2f}")
-            field2 = ("% Below Band",  f"−{pct_outside:.2f}%")
-            field3 = ("% To Midline",  f"+{pct_to_mid:.2f}%")
+            field1 = ("RSI",         f"**{data.rsi:.2f}**")
+            field2 = ("Lower Band",  f"${data.bbl:.2f} (−{pct_outside:.2f}%)")
+            field3 = ("Midline",     f"${data.bbm:.2f} (+{pct_to_mid:.2f}%)")
         elif signal == "OVERBOUGHT":
             pct_outside = (data.price - data.bbu) / data.bbu * 100
             pct_to_mid  = (data.price - data.bbm) / data.price * 100
-            field1 = ("Upper Band",    f"${data.bbu:.2f}")
-            field2 = ("% Above Band",  f"+{pct_outside:.2f}%")
-            field3 = ("% To Midline",  f"−{pct_to_mid:.2f}%")
+            field1 = ("RSI",         f"**{data.rsi:.2f}**")
+            field2 = ("Upper Band",  f"${data.bbu:.2f} (+{pct_outside:.2f}%)")
+            field3 = ("Midline",     f"${data.bbm:.2f} (−{pct_to_mid:.2f}%)")
         else:
             pct_to_upper = (data.bbu - data.price) / data.price * 100
             pct_to_lower = (data.price - data.bbl) / data.price * 100
-            # Show which side of the midline price is on
-            above_mid = data.price >= data.bbm
-            pct_to_mid = abs(data.price - data.bbm) / data.price * 100
-            mid_str = f"−{pct_to_mid:.2f}%" if above_mid else f"+{pct_to_mid:.2f}%"
-            field1 = ("Upper Band",      f"${data.bbu:.2f}  (+{pct_to_upper:.2f}%)")
-            field2 = ("Lower Band",      f"${data.bbl:.2f}  (−{pct_to_lower:.2f}%)")
-            field3 = ("% To Midline",    mid_str)
+            field1 = ("RSI",         f"**{data.rsi:.2f}**")
+            field2 = ("Upper Band",  f"${data.bbu:.2f} (+{pct_to_upper:.2f}%)")
+            field3 = ("Lower Band",  f"${data.bbl:.2f} (−{pct_to_lower:.2f}%)")
 
         # ── Build embed ───────────────────────────────────────────────────────
         chart = await asyncio.to_thread(
@@ -96,8 +96,8 @@ class AnalysisCog(commands.Cog, name="Analysis"):
 
         embed = discord.Embed(color=color, timestamp=datetime.now())
         embed.set_author(name=f"{signal}  ·  Manual check")
-        embed.title = ticker
-        embed.description = f"**${data.price:.2f}**  ·  RSI **{data.rsi:.2f}**  ·  6-month daily"
+        embed.title = title
+        embed.description = f"**${data.price:.2f}**  ·  {change_str}"
 
         embed.add_field(name=field1[0], value=field1[1], inline=True)
         embed.add_field(name=field2[0], value=field2[1], inline=True)
@@ -136,6 +136,7 @@ class AnalysisCog(commands.Cog, name="Analysis"):
             try:
                 alert = await asyncio.to_thread(scan_ticker, ticker)
                 if alert:
+                    company_name = await asyncio.to_thread(get_company_name, ticker)
                     chart = await asyncio.to_thread(
                         create_chart, alert.df, ticker, alert.bbl_col, alert.bbu_col, alert.bbm_col
                     )
@@ -148,6 +149,9 @@ class AnalysisCog(commands.Cog, name="Analysis"):
                         alert.target_band,
                         alert.bbm,
                         chart,
+                        company_name=company_name,
+                        day_change=alert.day_change,
+                        day_change_pct=alert.day_change_pct,
                     )
                     triggered += 1
             except Exception as e:
@@ -250,6 +254,8 @@ class AnalysisCog(commands.Cog, name="Analysis"):
                     alert.bbm,
                     chart,
                     company_name=names.get(ticker),
+                    day_change=alert.day_change,
+                    day_change_pct=alert.day_change_pct,
                 )
             except Exception as e:
                 logger.error("!scan sp500 alert send failed for %s: %s", ticker, e)

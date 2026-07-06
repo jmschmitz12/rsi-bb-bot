@@ -46,6 +46,8 @@ class TickerData(NamedTuple):
     bbl_col: str       # e.g. "BBL_20_2.0" — kept so the chart function never re-scans
     bbu_col: str
     bbm_col: str
+    day_change: float
+    day_change_pct: float
     df: pd.DataFrame
 
 
@@ -59,6 +61,8 @@ class ScanAlert(NamedTuple):
     bbl_col: str
     bbu_col: str
     bbm_col: str
+    day_change: float
+    day_change_pct: float
     df: pd.DataFrame
 
 
@@ -118,8 +122,13 @@ def _compute_indicators(ticker: str, df: pd.DataFrame) -> TickerData | None:
         logger.warning("%s: could not locate BB columns in %s", ticker, df.columns.tolist())
         return None
 
+    price = float(df["Close"].iloc[-1])
+    prev_close = float(df["Close"].iloc[-2]) if len(df) >= 2 else price
+    day_change = price - prev_close
+    day_change_pct = (day_change / prev_close * 100) if prev_close != 0 else 0.0
+
     return TickerData(
-        price=float(df["Close"].iloc[-1]),
+        price=price,
         rsi=float(df["RSI"].iloc[-1]),
         bbl=float(df[bbl_col].iloc[-1]),
         bbu=float(df[bbu_col].iloc[-1]),
@@ -127,6 +136,8 @@ def _compute_indicators(ticker: str, df: pd.DataFrame) -> TickerData | None:
         bbl_col=bbl_col,
         bbu_col=bbu_col,
         bbm_col=bbm_col,
+        day_change=day_change,
+        day_change_pct=day_change_pct,
         df=df,
     )
 
@@ -196,6 +207,8 @@ def alert_from_data(data: TickerData) -> ScanAlert | None:
             bbl_col=data.bbl_col,
             bbu_col=data.bbu_col,
             bbm_col=data.bbm_col,
+            day_change=data.day_change,
+            day_change_pct=data.day_change_pct,
             df=data.df,
         )
 
@@ -209,6 +222,8 @@ def alert_from_data(data: TickerData) -> ScanAlert | None:
             bbl_col=data.bbl_col,
             bbu_col=data.bbu_col,
             bbm_col=data.bbm_col,
+            day_change=data.day_change,
+            day_change_pct=data.day_change_pct,
             df=data.df,
         )
 
@@ -236,6 +251,14 @@ def check_ticker(ticker: str) -> TickerData | None:
     Returns None on failure; propagates HTTP 429.
     """
     return _fetch_and_process(ticker)
+
+
+def get_company_name(ticker: str) -> str | None:
+    try:
+        info = yf.Ticker(ticker).info
+        return info.get("shortName") or info.get("longName")
+    except Exception:
+        return None
 
 
 # ── Custom chart style ────────────────────────────────────────────────────────
