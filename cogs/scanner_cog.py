@@ -9,19 +9,23 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
-import holidays
 import pytz
 
 from discord.ext import commands
 
 from alerts import send_alert
 from config import AUTO_MUTE_HOURS, CHANNEL_ID, POLL_SPEED_MINUTES, RATE_LIMIT_COOLDOWN_MINUTES, TIMEZONE
-from market_data import create_chart, get_company_name, is_market_open, scan_ticker
+from market_data import (
+    create_chart,
+    get_company_name,
+    is_market_open,
+    next_trading_time,
+    scan_ticker,
+)
 
 logger = logging.getLogger(__name__)
 
 EASTERN = pytz.timezone(TIMEZONE)
-_NYSE_HOLIDAYS = holidays.NYSE()
 
 
 def _seconds_until_market_open() -> float:
@@ -30,16 +34,7 @@ def _seconds_until_market_open() -> float:
     Skips weekends and NYSE holidays automatically.
     """
     now = datetime.now(EASTERN)
-    candidate = now.replace(hour=9, minute=30, second=0, microsecond=0)
-
-    # If 9:30 AM today has already passed, start from tomorrow
-    if now >= candidate:
-        candidate += timedelta(days=1)
-
-    # Skip weekends and holidays
-    while candidate.weekday() >= 5 or candidate.date() in _NYSE_HOLIDAYS:
-        candidate += timedelta(days=1)
-
+    candidate = next_trading_time(9, 30, now)
     delta = (candidate - now).total_seconds()
     logger.info(
         "Market opens at %s — sleeping for %.0f seconds (%.1f hours)",
