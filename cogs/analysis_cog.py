@@ -17,7 +17,6 @@ from config import (
     BB_STD,
     CHANNEL_ID,
     RSI_LIMIT,
-    SP500_DAILY_MAX_CARDS,
     SP500_DAILY_SCAN_ENABLED,
     SP500_DAILY_SCAN_TIME,
 )
@@ -37,7 +36,6 @@ from utils import is_bot_owner
 SP500_CHUNK_SIZE = 50
 SP500_CHUNK_DELAY_SECONDS = 2.0
 ALERT_SEND_DELAY_SECONDS = 1.0
-OVERFLOW_LIST_LIMIT = 100   # hits listed by name in one summary; keeps it under Discord's 2000 chars
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +233,6 @@ class AnalysisCog(commands.Cog, name="Analysis"):
                 channel,
                 name="Daily S&P 500 scan",
                 exclude=set(state.watchlist),   # the 5-minute scanner already covers these
-                max_cards=SP500_DAILY_MAX_CARDS,
                 announce_start=False,
             )
 
@@ -245,14 +242,13 @@ class AnalysisCog(commands.Cog, name="Analysis"):
         *,
         name: str = "S&P 500 scan",
         exclude: set[str] = frozenset(),
-        max_cards: int | None = None,
         announce_start: bool = True,
     ) -> None:
         """
         Batch-scan the S&P 500 and post hits to destination, most extreme first.
 
-        exclude drops tickers before anything is downloaded. max_cards caps how
-        many hits get a full chart card; the rest are listed in the summary.
+        exclude drops tickers before anything is downloaded. Every hit gets a
+        full chart card.
         """
         try:
             tickers = await asyncio.to_thread(get_sp500_tickers)
@@ -315,8 +311,6 @@ class AnalysisCog(commands.Cog, name="Analysis"):
             return (a.price - a.target_band) / a.target_band
 
         triggered.sort(key=magnitude, reverse=True)
-        carded = triggered if max_cards is None else triggered[:max_cards]
-        listed = triggered[len(carded):]
 
         oversold = sum(1 for _, a in triggered if a.signal == "OVERSOLD")
         overbought = len(triggered) - oversold
@@ -326,20 +320,9 @@ class AnalysisCog(commands.Cog, name="Analysis"):
         )
         if failed:
             summary += f"  ·  {failed} tickers failed"
-        if listed:
-            shown = "  ".join(
-                f"{'🟢' if a.signal == 'OVERSOLD' else '🔴'} {t}"
-                for t, a in listed[:OVERFLOW_LIST_LIMIT]
-            )
-            more = len(listed) - OVERFLOW_LIST_LIMIT
-            summary += (
-                f"\nCharts for the {len(carded)} most extreme below. "
-                f"Also signaling (🟢 oversold, 🔴 overbought): {shown}"
-                + (f"  … +{more} more" if more > 0 else "")
-            )
         await destination.send(summary)
 
-        for ticker, alert in carded:
+        for ticker, alert in triggered:
             try:
                 chart = await asyncio.to_thread(
                     create_chart, alert.df, ticker, alert.bbl_col, alert.bbu_col, alert.bbm_col

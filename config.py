@@ -19,7 +19,6 @@ AUTO_MUTE_HOURS: int = 1             # how long to suppress repeat alerts after 
 # ── Daily S&P 500 scan ─────────────────────────────────────────────────────────
 SP500_DAILY_SCAN_ENABLED: bool = True
 SP500_DAILY_SCAN_TIME: tuple[int, int] = (15, 30)   # (hour, minute) ET, trading days only
-SP500_DAILY_MAX_CARDS: int = 10      # most extreme hits get a chart card; the rest are listed
 
 # ── Persistence ────────────────────────────────────────────────────────────────
 WATCHLIST_FILE: str = "watchlist.json"
