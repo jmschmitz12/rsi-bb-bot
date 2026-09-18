@@ -50,7 +50,7 @@ Discord command / background task
 | Scanner | `cogs/scanner_cog.py` | Background task; polls watchlist every 5 min during market hours |
 | Watchlist | `cogs/watchlist_cog.py` | `!add` / `!remove` / `!watchlist` commands |
 | Control | `cogs/control_cog.py` | `!mute` / `!pause` / `!resume` / `!status` |
-| Analysis | `cogs/analysis_cog.py` | `!check`, `!scan` (watchlist), `!scan sp500` (full S&P 500 batch scan) |
+| Analysis | `cogs/analysis_cog.py` | `!check`, `!scan` (watchlist), `!scan sp500` (full S&P 500 batch scan), daily scheduled S&P 500 scan |
 
 ### Scanner Scheduling
 
@@ -71,6 +71,8 @@ HTTP 429 from yfinance is re-raised by `market_data.py`. The scanner catches it,
 ### S&P 500 Scanning
 
 `!scan sp500` uses a different code path from the watchlist scan. `sp500.py` fetches the constituent list from Wikipedia (cached to `sp500.json` for 7 days, with `BRK.B`-style symbols normalized to `BRK-B` for yfinance). `market_data.fetch_batch()` then downloads OHLCV for ~50 tickers in a single yfinance call (`group_by="ticker"`, `threads=True`) and runs RSI/BB locally on each sub-DataFrame. This is dramatically fewer HTTP requests than looping `scan_ticker()`. The cog processes chunks of 50 with a 2s delay between them; on hits, it sorts by signal magnitude (most extreme first) and sends individual alerts with charts.
+
+The same scan also runs automatically once per trading day at `SP500_DAILY_SCAN_TIME` (3:30 PM ET), scheduled with `market_data.next_trading_time()`. The scheduled run skips watchlist tickers (the 5-minute scanner covers them), sends chart cards for only the `SP500_DAILY_MAX_CARDS` most extreme hits and lists the rest in the summary, and is skipped while `!pause` is active. An `asyncio.Lock` keeps a manual `!scan sp500` and the scheduled run from overlapping. Disable with `SP500_DAILY_SCAN_ENABLED = False`.
 
 ### Long-running I/O
 

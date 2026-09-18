@@ -2,6 +2,7 @@
 cogs/analysis_cog.py
 ────────────────────
 Commands: !check, !scan
+Background: daily S&P 500 scan near the close (SP500_DAILY_* in config)
 """
 
 import asyncio
@@ -12,7 +13,14 @@ import discord
 from discord.ext import commands
 
 from alerts import format_day_change, send_alert
-from config import BB_STD, RSI_LIMIT
+from config import (
+    BB_STD,
+    CHANNEL_ID,
+    RSI_LIMIT,
+    SP500_DAILY_MAX_CARDS,
+    SP500_DAILY_SCAN_ENABLED,
+    SP500_DAILY_SCAN_TIME,
+)
 from market_data import (
     EASTERN,
     alert_from_data,
@@ -20,6 +28,7 @@ from market_data import (
     create_chart,
     fetch_batch,
     get_company_name,
+    next_trading_time,
     scan_ticker,
 )
 from sp500 import get_sp500_names, get_sp500_tickers
@@ -28,6 +37,7 @@ from utils import is_bot_owner
 SP500_CHUNK_SIZE = 50
 SP500_CHUNK_DELAY_SECONDS = 2.0
 ALERT_SEND_DELAY_SECONDS = 1.0
+OVERFLOW_LIST_LIMIT = 100   # hits listed by name in one summary; keeps it under Discord's 2000 chars
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +45,16 @@ logger = logging.getLogger(__name__)
 class AnalysisCog(commands.Cog, name="Analysis"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+        self._sp500_lock = asyncio.Lock()   # one S&P 500 scan at a time, manual or scheduled
+        self._daily_task: asyncio.Task | None = None
+
+    async def cog_load(self) -> None:
+        if SP500_DAILY_SCAN_ENABLED:
+            self._daily_task = asyncio.create_task(self._daily_sp500_loop())
+
+    def cog_unload(self) -> None:
+        if self._daily_task:
+            self._daily_task.cancel()
 
     @commands.command()
     async def check(self, ctx: commands.Context, ticker: str) -> None:
@@ -122,7 +142,11 @@ class AnalysisCog(commands.Cog, name="Analysis"):
         if mode is None:
             await self._scan_watchlist(ctx)
         elif mode.lower() == "sp500":
-            await self._scan_sp500(ctx)
+            if self._sp500_lock.locked():
+                await ctx.send("⏳ An S&P 500 scan is already running — try again in a few minutes.")
+                return
+            async with self._sp500_lock:
+                await self._scan_sp500(ctx)
         else:
             await ctx.send(f"❌ Unknown scan mode: `{mode}`. Use `!scan` or `!scan sp500`.")
 
@@ -168,24 +192,87 @@ class AnalysisCog(commands.Cog, name="Analysis"):
         else:
             await ctx.send(f"✅ Scan complete — {triggered} signal(s) fired.")
 
-    async def _scan_sp500(self, ctx: commands.Context) -> None:
+    async def _daily_sp500_loop(self) -> None:
+        """Runs the S&P 500 scan once per trading day at SP500_DAILY_SCAN_TIME ET."""
+        await self.bot.wait_until_ready()
+        run_at = next_trading_time(*SP500_DAILY_SCAN_TIME)
+
+        while True:
+            logger.info(
+                "Daily S&P 500 scan scheduled for %s",
+                run_at.strftime("%Y-%m-%d %I:%M %p ET"),
+            )
+            await asyncio.sleep(max(0.0, (run_at - datetime.now(EASTERN)).total_seconds()))
+
+            try:
+                await self._run_daily_sp500()
+            except Exception:
+                logger.exception("Daily S&P 500 scan failed")
+
+            # Schedule from the slot just used, so waking a moment early can
+            # never run the same day twice.
+            run_at = next_trading_time(
+                *SP500_DAILY_SCAN_TIME, now=max(run_at, datetime.now(EASTERN))
+            )
+
+    async def _run_daily_sp500(self) -> None:
+        state = self.bot.state
+
+        if state.is_paused():
+            logger.info("Daily S&P 500 scan skipped — scanner is paused")
+            return
+        if self._sp500_lock.locked():
+            logger.info("Daily S&P 500 scan skipped — a manual scan is already running")
+            return
+
+        channel = self.bot.get_channel(CHANNEL_ID)
+        if not channel:
+            logger.error("Cannot resolve CHANNEL_ID %d — daily S&P 500 scan skipped", CHANNEL_ID)
+            return
+
+        async with self._sp500_lock:
+            await self._scan_sp500(
+                channel,
+                name="Daily S&P 500 scan",
+                exclude=set(state.watchlist),   # the 5-minute scanner already covers these
+                max_cards=SP500_DAILY_MAX_CARDS,
+                announce_start=False,
+            )
+
+    async def _scan_sp500(
+        self,
+        destination: discord.abc.Messageable,
+        *,
+        name: str = "S&P 500 scan",
+        exclude: set[str] = frozenset(),
+        max_cards: int | None = None,
+        announce_start: bool = True,
+    ) -> None:
+        """
+        Batch-scan the S&P 500 and post hits to destination, most extreme first.
+
+        exclude drops tickers before anything is downloaded. max_cards caps how
+        many hits get a full chart card; the rest are listed in the summary.
+        """
         try:
             tickers = await asyncio.to_thread(get_sp500_tickers)
         except Exception as e:
             logger.error("S&P 500 list load failed: %s", e)
-            await ctx.send(f"❌ Could not load S&P 500 list: {e}")
+            await destination.send(f"❌ Could not load S&P 500 list: {e}")
             return
 
+        tickers = [t for t in tickers if t not in exclude]
         names = await asyncio.to_thread(get_sp500_names)
 
         chunks = [
             tickers[i : i + SP500_CHUNK_SIZE]
             for i in range(0, len(tickers), SP500_CHUNK_SIZE)
         ]
-        await ctx.send(
-            f"🔍 Scanning S&P 500 — {len(tickers)} tickers in {len(chunks)} batches. "
-            f"This will take a few minutes..."
-        )
+        if announce_start:
+            await destination.send(
+                f"🔍 Scanning S&P 500 — {len(tickers)} tickers in {len(chunks)} batches. "
+                f"This will take a few minutes..."
+            )
 
         triggered: list[tuple[str, object]] = []
         succeeded = 0
@@ -195,12 +282,12 @@ class AnalysisCog(commands.Cog, name="Analysis"):
                 batch = await asyncio.to_thread(fetch_batch, chunk)
             except Exception as e:
                 if "429" in str(e):
-                    await ctx.send(
-                        f"⚠️ Rate limited at batch {i}/{len(chunks)} — scan aborted early."
+                    await destination.send(
+                        f"⚠️ {name} rate limited at batch {i}/{len(chunks)} — aborted early."
                     )
-                    logger.warning("!scan sp500 aborted at chunk %d due to rate limit", i)
+                    logger.warning("%s aborted at chunk %d due to rate limit", name, i)
                     return
-                logger.error("!scan sp500 batch %d error: %s", i, e)
+                logger.error("%s batch %d error: %s", name, i, e)
                 continue
 
             succeeded += len(batch)
@@ -214,21 +301,11 @@ class AnalysisCog(commands.Cog, name="Analysis"):
         failed = len(tickers) - succeeded
 
         if not triggered:
-            await ctx.send(
-                f"✅ S&P 500 scan complete — no signals triggered "
+            await destination.send(
+                f"✅ {name} complete — no signals triggered "
                 f"({succeeded} processed, {failed} failed)."
             )
             return
-
-        oversold = sum(1 for _, a in triggered if a.signal == "OVERSOLD")
-        overbought = len(triggered) - oversold
-        summary = (
-            f"✅ S&P 500 scan complete — **{len(triggered)} signal(s)** "
-            f"({oversold} oversold, {overbought} overbought)"
-        )
-        if failed:
-            summary += f"  ·  {failed} tickers failed"
-        await ctx.send(summary)
 
         # Sort by signal magnitude — most extreme first.
         def magnitude(item: tuple[str, object]) -> float:
@@ -238,14 +315,37 @@ class AnalysisCog(commands.Cog, name="Analysis"):
             return (a.price - a.target_band) / a.target_band
 
         triggered.sort(key=magnitude, reverse=True)
+        carded = triggered if max_cards is None else triggered[:max_cards]
+        listed = triggered[len(carded):]
 
-        for ticker, alert in triggered:
+        oversold = sum(1 for _, a in triggered if a.signal == "OVERSOLD")
+        overbought = len(triggered) - oversold
+        summary = (
+            f"✅ {name} complete — **{len(triggered)} signal(s)** "
+            f"({oversold} oversold, {overbought} overbought)"
+        )
+        if failed:
+            summary += f"  ·  {failed} tickers failed"
+        if listed:
+            shown = "  ".join(
+                f"{'🟢' if a.signal == 'OVERSOLD' else '🔴'} {t}"
+                for t, a in listed[:OVERFLOW_LIST_LIMIT]
+            )
+            more = len(listed) - OVERFLOW_LIST_LIMIT
+            summary += (
+                f"\nCharts for the {len(carded)} most extreme below. "
+                f"Also signaling (🟢 oversold, 🔴 overbought): {shown}"
+                + (f"  … +{more} more" if more > 0 else "")
+            )
+        await destination.send(summary)
+
+        for ticker, alert in carded:
             try:
                 chart = await asyncio.to_thread(
                     create_chart, alert.df, ticker, alert.bbl_col, alert.bbu_col, alert.bbm_col
                 )
                 await send_alert(
-                    ctx,
+                    destination,
                     ticker,
                     alert.signal,
                     alert.price,
@@ -258,10 +358,9 @@ class AnalysisCog(commands.Cog, name="Analysis"):
                     day_change_pct=alert.day_change_pct,
                 )
             except Exception as e:
-                logger.error("!scan sp500 alert send failed for %s: %s", ticker, e)
+                logger.error("%s alert send failed for %s: %s", name, ticker, e)
 
             await asyncio.sleep(ALERT_SEND_DELAY_SECONDS)
-
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(AnalysisCog(bot))

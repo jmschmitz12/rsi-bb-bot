@@ -16,7 +16,7 @@ pass in the chart function.
 
 import io
 import logging
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
 from typing import NamedTuple
 
 import holidays
@@ -86,6 +86,24 @@ def is_market_open() -> bool:
     market_open = dt_time(9, 30)
     market_close = dt_time(16, 0)
     return market_open <= now.time() <= market_close
+
+
+def next_trading_time(hour: int, minute: int, now: datetime | None = None) -> datetime:
+    """
+    Return the next hour:minute ET that falls on an NYSE trading day,
+    skipping weekends and holidays.
+
+    Each candidate is built with EASTERN.localize() rather than by adding
+    days to an aware datetime, so the UTC offset is correct on either side
+    of a daylight-saving change.
+    """
+    now = now or datetime.now(EASTERN)
+    day = now.date()
+    while True:
+        candidate = EASTERN.localize(datetime.combine(day, dt_time(hour, minute)))
+        if candidate > now and day.weekday() < 5 and day not in _NYSE_HOLIDAYS:
+            return candidate
+        day += timedelta(days=1)
 
 
 # ── Core data pipeline ────────────────────────────────────────────────────────
