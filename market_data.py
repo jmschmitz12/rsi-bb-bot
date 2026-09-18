@@ -20,6 +20,7 @@ from datetime import datetime, time as dt_time
 from typing import NamedTuple
 
 import holidays
+import matplotlib.pyplot as plt
 import mplfinance as mpf
 import pandas as pd
 import pandas_ta as ta
@@ -350,7 +351,12 @@ def create_chart(
     rsi_ax.axhline(30, color="#2ecc71", linewidth=0.7, linestyle="--", alpha=0.8)
     rsi_ax.axhline(70, color="#e74c3c", linewidth=0.7, linestyle="--", alpha=0.8)
 
-    fig.savefig(image_stream, format="png", bbox_inches="tight", dpi=130)
+    try:
+        fig.savefig(image_stream, format="png", bbox_inches="tight", dpi=130)
+    finally:
+        # mpf.plot() registers the figure with pyplot, which holds a reference
+        # to it forever. Without this close the process leaks ~7 MB per chart.
+        plt.close(fig)
 
     image_stream.seek(0)
     return image_stream

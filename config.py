@@ -19,6 +19,7 @@ AUTO_MUTE_HOURS: int = 1             # how long to suppress repeat alerts after 
 # ── Persistence ────────────────────────────────────────────────────────────────
 WATCHLIST_FILE: str = "watchlist.json"
 MUTES_FILE: str = "mutes.json"
+ALERT_PRICES_FILE: str = "alert_prices.json"   # last alerted price per ticker
 LOG_FILE: str = "bot.log"
 LOG_MAX_BYTES: int = 5 * 1024 * 1024  # 5 MB per log file
 LOG_BACKUP_COUNT: int = 7             # keep 7 rotated files (~35 MB total)

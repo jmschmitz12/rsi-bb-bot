@@ -3,3 +3,9 @@ venv/
 __pycache__/
 *.log
 *.pyc
+
+# runtime state
+mutes.json
+alert_prices.json
+sp500.json
+*.bak

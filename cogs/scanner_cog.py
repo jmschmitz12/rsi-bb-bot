@@ -123,7 +123,18 @@ class ScannerCog(commands.Cog, name="Scanner"):
 
                 try:
                     alert = await asyncio.to_thread(scan_ticker, ticker)
-                    if alert:
+                    if alert and state.is_stale_repeat(ticker, alert.price):
+                        # Price has not moved since the last alert — typically a
+                        # mutual fund, whose NAV prints once per trading day.
+                        # Re-sending would reproduce an identical card, so hold
+                        # this ticker until the next session instead.
+                        await asyncio.to_thread(state.mute_until_session_end, ticker)
+                        logger.info(
+                            "%s: unchanged at $%.2f since last alert — muted until close",
+                            ticker,
+                            alert.price,
+                        )
+                    elif alert:
                         company_name = await asyncio.to_thread(get_company_name, ticker)
                         chart = await asyncio.to_thread(
                             create_chart, alert.df, ticker, alert.bbl_col, alert.bbu_col, alert.bbm_col
@@ -141,7 +152,9 @@ class ScannerCog(commands.Cog, name="Scanner"):
                             day_change=alert.day_change,
                             day_change_pct=alert.day_change_pct,
                         )
-                        await asyncio.to_thread(state.mute_ticker, ticker, AUTO_MUTE_HOURS * 60)
+                        await asyncio.to_thread(
+                            state.mute_ticker, ticker, AUTO_MUTE_HOURS * 60, alert.price
+                        )
                 except Exception as e:
                     if "429" in str(e):
                         state.rate_limit_cooldown = True
