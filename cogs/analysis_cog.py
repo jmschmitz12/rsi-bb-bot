@@ -228,6 +228,7 @@ class AnalysisCog(commands.Cog, name="Analysis"):
             logger.error("Cannot resolve CHANNEL_ID %d — daily S&P 500 scan skipped", CHANNEL_ID)
             return
 
+        logger.info("Daily S&P 500 scan starting")
         async with self._sp500_lock:
             await self._scan_sp500(
                 channel,
@@ -295,6 +296,10 @@ class AnalysisCog(commands.Cog, name="Analysis"):
             await asyncio.sleep(SP500_CHUNK_DELAY_SECONDS)
 
         failed = len(tickers) - succeeded
+        logger.info(
+            "%s complete: %d signal(s), %d processed, %d failed",
+            name, len(triggered), succeeded, failed,
+        )
 
         if not triggered:
             await destination.send(

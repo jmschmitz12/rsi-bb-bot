@@ -77,3 +77,5 @@ The same scan also runs automatically once per trading day at `SP500_DAILY_SCAN_
 ### Long-running I/O
 
 `market_data.py` functions (`scan_ticker`, `check_ticker`, `create_chart`) are run via `asyncio.to_thread()` in cogs because yfinance and mplfinance are synchronous and would block the event loop.
+
+`yf.download()` is not thread-safe: it resets shared module state in yfinance and busy-waits on it, so two overlapping calls (e.g. the watchlist scanner and the S&P 500 batch scan) can hang one of them forever. Every `yf.download()` call must go through `market_data._YF_DOWNLOAD_LOCK`.

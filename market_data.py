@@ -16,6 +16,7 @@ pass in the chart function.
 
 import io
 import logging
+import threading
 from datetime import datetime, time as dt_time, timedelta
 from typing import NamedTuple
 
@@ -33,6 +34,13 @@ logger = logging.getLogger(__name__)
 
 EASTERN = pytz.timezone(TIMEZONE)
 _NYSE_HOLIDAYS = holidays.NYSE()
+
+# yf.download() is not thread-safe. Every call resets module-level state in
+# yfinance (shared._DFS) and then waits until that state holds all of its own
+# tickers. Two overlapping downloads, such as a watchlist scan running while
+# the S&P 500 batch scan starts, can leave one of them waiting forever. All
+# downloads go through this lock so only one runs at a time.
+_YF_DOWNLOAD_LOCK = threading.Lock()
 
 
 # ── Return types ──────────────────────────────────────────────────────────────
@@ -168,7 +176,8 @@ def _fetch_and_process(ticker: str) -> TickerData | None:
     Re-raises HTTP 429 so callers can trigger a rate-limit cooldown.
     """
     try:
-        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+        with _YF_DOWNLOAD_LOCK:
+            df = yf.download(ticker, period="6mo", interval="1d", progress=False)
         return _compute_indicators(ticker, df)
     except Exception as e:
         if "429" in str(e):
@@ -189,14 +198,15 @@ def fetch_batch(tickers: list[str]) -> dict[str, TickerData]:
     if not tickers:
         return {}
 
-    df = yf.download(
-        tickers,
-        period="6mo",
-        interval="1d",
-        progress=False,
-        group_by="ticker",
-        threads=True,
-    )
+    with _YF_DOWNLOAD_LOCK:
+        df = yf.download(
+            tickers,
+            period="6mo",
+            interval="1d",
+            progress=False,
+            group_by="ticker",
+            threads=True,
+        )
 
     results: dict[str, TickerData] = {}
     for ticker in tickers:
